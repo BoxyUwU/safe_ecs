@@ -218,4 +218,19 @@ mod tests {
         let returned = q.iter_mut().collect::<Vec<_>>();
         assert_eq!(returned.as_slice(), &[&12, &13]);
     }
+
+    #[test]
+    fn tuple_query() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        world.insert_component(e1, 10_u32);
+        world.insert_component(e1, 12_u64);
+        let e2 = world.spawn();
+        world.insert_component(e2, 13_u64);
+        world.insert_component(e2, 9_u128);
+
+        let mut q = world.query::<(&u32, &u64)>();
+        let returned = q.iter_mut().collect::<Vec<_>>();
+        assert_eq!(returned.as_slice(), &[(&10, &12)]);
+    }
 }
