@@ -181,40 +181,39 @@ impl World {
     }
 
     pub fn insert_component<T: Component>(&mut self, entity: Entity, component: T) -> Option<T> {
-        match self.has_component::<T>(entity)? {
-            true => Some(std::mem::replace(
-                &mut *self.get_component_mut::<T>(entity).unwrap(),
-                component,
-            )),
-            false => {
-                let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
-                let new_archetype_id = self.get_or_insert_archetype_from_insert::<T>(archetype_id);
-                self.entity_meta[entity.0] = Some(EntityMeta {
-                    archetype: new_archetype_id,
-                });
-                let (old_archetype, new_archetype) =
-                    get_two(&mut self.archetypes, archetype_id, new_archetype_id);
-
-                let entity_idx = old_archetype.get_entity_idx(entity).unwrap();
-                old_archetype.entities.swap_remove(entity_idx);
-
-                for (column_type_id, &old_column) in old_archetype.column_indices.iter() {
-                    let new_column = *new_archetype.column_indices.get(column_type_id).unwrap();
-                    let mut storages =
-                        RefCell::borrow_mut(self.columns.get(column_type_id).unwrap());
-                    let (old_column, new_column) = get_two(&mut *storages, old_column, new_column);
-                    old_column.swap_remove_move_to(new_column, entity_idx);
-                }
-                new_archetype.entities.push(entity);
-
-                let column_idx = *new_archetype
-                    .column_indices
-                    .get(&TypeId::of::<T>())
-                    .unwrap();
-                self.get_column_mut::<T>(column_idx).push(component);
-                None
-            }
+        if self.is_alive(entity) == false {
+            return None;
         }
+
+        if let Some(mut old_component) = self.get_component_mut::<T>(entity) {
+            return Some(std::mem::replace(&mut *old_component, component));
+        }
+
+        let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
+        let new_archetype_id = self.get_or_insert_archetype_from_insert::<T>(archetype_id);
+        self.entity_meta[entity.0] = Some(EntityMeta {
+            archetype: new_archetype_id,
+        });
+        let (old_archetype, new_archetype) =
+            get_two(&mut self.archetypes, archetype_id, new_archetype_id);
+
+        let entity_idx = old_archetype.get_entity_idx(entity).unwrap();
+        old_archetype.entities.swap_remove(entity_idx);
+
+        for (column_type_id, &old_column) in old_archetype.column_indices.iter() {
+            let new_column = *new_archetype.column_indices.get(column_type_id).unwrap();
+            let mut storages = RefCell::borrow_mut(self.columns.get(column_type_id).unwrap());
+            let (old_column, new_column) = get_two(&mut *storages, old_column, new_column);
+            old_column.swap_remove_move_to(new_column, entity_idx);
+        }
+        new_archetype.entities.push(entity);
+
+        let column_idx = *new_archetype
+            .column_indices
+            .get(&TypeId::of::<T>())
+            .unwrap();
+        self.get_column_mut::<T>(column_idx).push(component);
+        None
     }
 }
 
