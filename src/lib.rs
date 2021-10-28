@@ -51,7 +51,6 @@ impl dyn Storage {
 pub struct Entity(usize);
 
 struct EntityMeta {
-    // FIXME we dont update this yet
     archetype: usize,
 }
 
@@ -152,6 +151,9 @@ impl World {
 
         let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
         let new_archetype_id = self.get_or_insert_archetype_from_remove::<T>(archetype_id);
+        self.entity_meta[entity.0] = Some(EntityMeta {
+            archetype: new_archetype_id,
+        });
         let (old_archetype, new_archetype) =
             get_two(&mut self.archetypes, archetype_id, new_archetype_id);
 
@@ -187,6 +189,9 @@ impl World {
             false => {
                 let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
                 let new_archetype_id = self.get_or_insert_archetype_from_insert::<T>(archetype_id);
+                self.entity_meta[entity.0] = Some(EntityMeta {
+                    archetype: new_archetype_id,
+                });
                 let (old_archetype, new_archetype) =
                     get_two(&mut self.archetypes, archetype_id, new_archetype_id);
 
