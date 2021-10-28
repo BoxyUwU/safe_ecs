@@ -1,7 +1,7 @@
 use crate::{
     sealed,
     world::{Archetype, Storage},
-    Component, World,
+    Component, Entity, World,
 };
 use std::{any::TypeId, cell};
 
@@ -14,10 +14,33 @@ pub trait QueryParam: sealed::Sealed {
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a>;
     fn archetype_matches(archetype: &Archetype) -> bool;
     fn item_iter_from_archetype<'a>(
-        archetype: &Archetype,
+        archetype: &'a Archetype,
         lock_borrow: &mut Self::LockBorrow<'a>,
     ) -> Self::ItemIter<'a>;
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>>;
+}
+
+impl sealed::Sealed for Entity {}
+impl QueryParam for Entity {
+    type Lock<'a> = ();
+    type LockBorrow<'a> = ();
+    type Item<'a> = Entity;
+    type ItemIter<'a> = std::slice::Iter<'a, Entity>;
+
+    fn lock_from_world(_: &World) -> Self::Lock<'_> {}
+    fn lock_borrows_from_locks<'a, 'b>(_: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {}
+    fn archetype_matches(_: &Archetype) -> bool {
+        true
+    }
+    fn item_iter_from_archetype<'a>(
+        archetype: &'a Archetype,
+        _: &mut Self::LockBorrow<'a>,
+    ) -> Self::ItemIter<'a> {
+        archetype.entities.iter()
+    }
+    fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
+        iter.next().copied()
+    }
 }
 
 impl<T: Component> sealed::Sealed for &'static T {}
@@ -41,7 +64,7 @@ impl<T: Component> QueryParam for &'static T {
     }
 
     fn item_iter_from_archetype<'a>(
-        archetype: &Archetype,
+        archetype: &'a Archetype,
         lock_borrow: &mut Self::LockBorrow<'a>,
     ) -> Self::ItemIter<'a> {
         let col = archetype.column_indices[&TypeId::of::<T>()];
@@ -74,7 +97,7 @@ impl<T: Component> QueryParam for &'static mut T {
     }
 
     fn item_iter_from_archetype<'a>(
-        archetype: &Archetype,
+        archetype: &'a Archetype,
         (num_chopped_off, lock_borrow): &mut Self::LockBorrow<'a>,
     ) -> Self::ItemIter<'a> {
         let col = archetype.column_indices[&TypeId::of::<T>()];
@@ -121,7 +144,7 @@ macro_rules! query_param_tuple_impl {
             }
 
             #[allow(non_snake_case)]
-            fn item_iter_from_archetype<'a>(archetype: &Archetype, lock_borrow: &mut Self::LockBorrow<'a>) -> Self::ItemIter<'a> {
+            fn item_iter_from_archetype<'a>(archetype: &'a Archetype, lock_borrow: &mut Self::LockBorrow<'a>) -> Self::ItemIter<'a> {
                 let ($($T,)+) = lock_borrow;
                 ($($T::item_iter_from_archetype(archetype, $T),)+)
             }
@@ -229,8 +252,8 @@ mod tests {
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
-        let mut q = world.query::<(&u32, &u64)>();
+        let mut q = world.query::<(Entity, &u32, &u64)>();
         let returned = q.iter_mut().collect::<Vec<_>>();
-        assert_eq!(returned.as_slice(), &[(&10, &12)]);
+        assert_eq!(returned.as_slice(), &[(e1, &10, &12)]);
     }
 }

@@ -50,7 +50,7 @@ impl dyn Storage {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Entity(usize);
 
 pub(crate) struct EntityMeta {
