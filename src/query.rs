@@ -199,3 +199,23 @@ impl<'a, 'b: 'a, Q: QueryParam> Iterator for QueryIter<'a, 'b, Q> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::world::*;
+
+    #[test]
+    fn simple_query() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        world.insert_component(e1, 10_u32);
+        world.insert_component(e1, 12_u64);
+        let e2 = world.spawn();
+        world.insert_component(e2, 13_u64);
+        world.insert_component(e2, 9_u128);
+
+        let mut q = world.query::<&u64>();
+        let returned = q.iter_mut().collect::<Vec<_>>();
+        assert_eq!(returned.as_slice(), &[&12, &13]);
+    }
+}
