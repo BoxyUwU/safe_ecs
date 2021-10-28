@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::{
     any::{Any, TypeId},
     cell::{self, RefCell},
@@ -93,6 +95,7 @@ impl World {
     pub fn spawn(&mut self) -> Entity {
         let id = self.entity_meta.len();
         self.entity_meta.push(Some(EntityMeta { archetype: 0 }));
+        self.archetypes[0].entities.push(Entity(id));
         Entity(id)
     }
 
@@ -319,5 +322,91 @@ impl World {
             column_indices,
         });
         self.archetypes.len() - 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    trait UnwrapNone {
+        fn unwrap_none(self);
+    }
+
+    impl<T> UnwrapNone for Option<T> {
+        fn unwrap_none(self) {
+            match self {
+                Some(_) => panic!("expected `None` found `Some(_)`"),
+                None => (),
+            }
+        }
+    }
+
+    #[test]
+    fn basic_insert() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert_component(e, 10_u32).unwrap_none();
+        assert_eq!(*world.get_component::<u32>(e).unwrap(), 10_u32);
+    }
+
+    #[test]
+    fn insert_overwrite() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert_component(e, 10_u32).unwrap_none();
+        assert_eq!(world.insert_component(e, 12_u32).unwrap(), 10_u32);
+        assert_eq!(*world.get_component::<u32>(e).unwrap(), 12_u32);
+    }
+
+    #[test]
+    fn insert_archetype_change() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert_component(e, 10_u32).unwrap_none();
+        world.insert_component(e, 12_u64).unwrap_none();
+        assert_eq!(world.insert_component(e, 15_u32).unwrap(), 10_u32);
+        assert_eq!(*world.get_component::<u32>(e).unwrap(), 15_u32);
+        assert_eq!(*world.get_component::<u64>(e).unwrap(), 12_u64);
+    }
+
+    #[test]
+    fn insert_on_dead() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert_component(e, 10_u32).unwrap_none();
+        world.despawn(e);
+        world.insert_component(e, 12_u32).unwrap_none();
+    }
+
+    #[test]
+    fn basic_remove() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.remove_component::<u32>(e).unwrap_none();
+        world.insert_component(e, 10_u32).unwrap_none();
+        assert_eq!(world.remove_component::<u32>(e).unwrap(), 10_u32);
+        world.remove_component::<u32>(e).unwrap_none();
+    }
+
+    #[test]
+    fn remove_archetype_change() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert_component(e, 10_u32).unwrap_none();
+        world.insert_component(e, 12_u64).unwrap_none();
+        assert_eq!(world.insert_component(e, 15_u32).unwrap(), 10_u32);
+        world.remove_component::<u64>(e);
+        assert_eq!(*world.get_component::<u32>(e).unwrap(), 15_u32);
+        assert_eq!(world.has_component::<u64>(e).unwrap(), false);
+    }
+
+    #[test]
+    fn remove_on_dead() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert_component(e, 10_u32).unwrap_none();
+        world.despawn(e);
+        world.remove_component::<u32>(e).unwrap_none();
     }
 }
