@@ -3,7 +3,7 @@ use crate::{
     world::{Archetype, Storage},
     Component, Entity, World,
 };
-use std::{any::TypeId, cell};
+use std::{any::TypeId, cell, marker::PhantomData};
 
 pub trait QueryParam: sealed::Sealed {
     type Lock<'a>;
@@ -122,7 +122,7 @@ impl<T: Component> QueryParam for &'static mut T {
 
 macro_rules! query_param_tuple_impl {
     ($($T:ident)+) => {
-        impl<$($T: sealed::Sealed),+> sealed::Sealed for ($($T,)+) {}
+        impl<$($T: QueryParam),+> sealed::Sealed for ($($T,)+) {}
         impl<$($T: QueryParam),+> QueryParam for ($($T,)+) {
             type Lock<'a> = ($($T::Lock<'a>,)+);
             type LockBorrow<'a> = ($($T::LockBorrow<'a>,)+);
@@ -166,6 +166,52 @@ query_param_tuple_impl!(A B C D);
 query_param_tuple_impl!(A B C);
 query_param_tuple_impl!(A B);
 query_param_tuple_impl!(A);
+
+impl<Q: QueryParam> sealed::Sealed for Maybe<Q> {}
+pub struct Maybe<Q: QueryParam>(PhantomData<Q>);
+pub enum MaybeIter<'a, Q: QueryParam> {
+    Some(Q::ItemIter<'a>),
+    None(usize),
+}
+impl<Q: QueryParam> QueryParam for Maybe<Q> {
+    type Lock<'a> = Q::Lock<'a>;
+    type LockBorrow<'a> = Q::LockBorrow<'a>;
+    type Item<'a> = Option<Q::Item<'a>>;
+    type ItemIter<'a> = MaybeIter<'a, Q>;
+
+    fn lock_from_world(world: &World) -> Self::Lock<'_> {
+        Q::lock_from_world(world)
+    }
+
+    fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
+        Q::lock_borrows_from_locks(lock)
+    }
+
+    fn archetype_matches(_: &Archetype) -> bool {
+        true
+    }
+
+    fn item_iter_from_archetype<'a>(
+        archetype: &'a Archetype,
+        lock_borrow: &mut Self::LockBorrow<'a>,
+    ) -> Self::ItemIter<'a> {
+        match Q::archetype_matches(archetype) {
+            true => MaybeIter::Some(Q::item_iter_from_archetype(archetype, lock_borrow)),
+            false => MaybeIter::None(archetype.entities.len()),
+        }
+    }
+
+    fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
+        match iter {
+            MaybeIter::Some(iter) => Q::advance_iter(iter).map(|item| Some(item)),
+            MaybeIter::None(0) => None,
+            MaybeIter::None(remaining) => {
+                *remaining -= 1;
+                Some(None)
+            }
+        }
+    }
+}
 
 pub struct QueryBorrows<'a, Q: QueryParam>(pub(crate) &'a World, pub(crate) Q::Lock<'a>);
 impl<'b, Q: QueryParam> QueryBorrows<'b, Q> {
@@ -225,6 +271,7 @@ impl<'a, 'b: 'a, Q: QueryParam> Iterator for QueryIter<'a, 'b, Q> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::world::*;
 
     #[test]
@@ -255,5 +302,26 @@ mod tests {
         let mut q = world.query::<(Entity, &u32, &u64)>();
         let returned = q.iter_mut().collect::<Vec<_>>();
         assert_eq!(returned.as_slice(), &[(e1, &10, &12)]);
+    }
+
+    #[test]
+    fn maybe_query() {
+        let mut world = World::new();
+        let e1 = world.spawn();
+        world.insert_component(e1, 10_u32);
+        world.insert_component(e1, 12_u64);
+        let e2 = world.spawn();
+        world.insert_component(e2, 13_u64);
+        world.insert_component(e2, 9_u128);
+
+        let mut q = world.query::<(Entity, Maybe<&u32>, &u64, Maybe<&u128>)>();
+        let returned = q.iter_mut().collect::<Vec<_>>();
+        assert_eq!(
+            returned.as_slice(),
+            &[
+                (e1, Some(&10_u32), &12_u64, None),
+                (e2, None, &13_u64, Some(&9_u128))
+            ],
+        )
     }
 }

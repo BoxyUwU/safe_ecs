@@ -4,6 +4,7 @@
 mod query;
 mod world;
 
+pub use query::{Maybe, QueryBorrows, QueryIter};
 pub use world::{Component, Entity, World};
 
 pub(crate) mod sealed {
