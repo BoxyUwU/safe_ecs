@@ -1,6 +1,2 @@
-[package]
-name = "safe-ecs"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
+[workspace]
+members = ["safe-ecs-derive", "safe-ecs"]

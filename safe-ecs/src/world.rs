@@ -7,8 +7,6 @@ use std::{
 use crate::{query, sealed};
 
 pub trait Component: 'static {}
-impl<T: 'static> Component for T {}
-
 pub trait Storage: sealed::Sealed + 'static {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
