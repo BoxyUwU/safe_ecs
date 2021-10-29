@@ -91,11 +91,21 @@ impl World {
             .unwrap_or(false)
     }
 
-    pub fn spawn(&mut self) -> Entity {
+    pub fn spawn(&mut self) -> EntityBuilder<'_> {
         let id = self.entity_meta.len();
         self.entity_meta.push(Some(EntityMeta { archetype: 0 }));
         self.archetypes[0].entities.push(Entity(id));
-        Entity(id)
+        EntityBuilder {
+            entity: Entity(id),
+            world: self,
+        }
+    }
+
+    pub fn entity_builder(&mut self, entity: Entity) -> EntityBuilder<'_> {
+        EntityBuilder {
+            entity,
+            world: self,
+        }
     }
 
     pub fn despawn(&mut self, entity: Entity) {
@@ -326,6 +336,27 @@ impl World {
     }
 }
 
+pub struct EntityBuilder<'a> {
+    entity: Entity,
+    world: &'a mut World,
+}
+
+impl<'a> EntityBuilder<'a> {
+    pub fn insert<T: Component>(&mut self, component: T) -> &mut Self {
+        self.world.insert_component(self.entity, component);
+        self
+    }
+
+    pub fn remove<T: Component>(&mut self) -> &mut Self {
+        self.world.remove_component::<T>(self.entity);
+        self
+    }
+
+    pub fn id(&self) -> Entity {
+        self.entity
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,7 +377,7 @@ mod tests {
     #[test]
     fn basic_insert() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.insert_component(e, 10_u32).unwrap_none();
         assert_eq!(*world.get_component::<u32>(e).unwrap(), 10_u32);
     }
@@ -354,7 +385,7 @@ mod tests {
     #[test]
     fn insert_overwrite() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.insert_component(e, 10_u32).unwrap_none();
         assert_eq!(world.insert_component(e, 12_u32).unwrap(), 10_u32);
         assert_eq!(*world.get_component::<u32>(e).unwrap(), 12_u32);
@@ -363,7 +394,7 @@ mod tests {
     #[test]
     fn insert_archetype_change() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.insert_component(e, 10_u32).unwrap_none();
         world.insert_component(e, 12_u64).unwrap_none();
         assert_eq!(world.insert_component(e, 15_u32).unwrap(), 10_u32);
@@ -374,7 +405,7 @@ mod tests {
     #[test]
     fn insert_on_dead() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.insert_component(e, 10_u32).unwrap_none();
         world.despawn(e);
         world.insert_component(e, 12_u32).unwrap_none();
@@ -383,7 +414,7 @@ mod tests {
     #[test]
     fn basic_remove() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.remove_component::<u32>(e).unwrap_none();
         world.insert_component(e, 10_u32).unwrap_none();
         assert_eq!(world.remove_component::<u32>(e).unwrap(), 10_u32);
@@ -393,7 +424,7 @@ mod tests {
     #[test]
     fn remove_archetype_change() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.insert_component(e, 10_u32).unwrap_none();
         world.insert_component(e, 12_u64).unwrap_none();
         assert_eq!(world.insert_component(e, 15_u32).unwrap(), 10_u32);
@@ -405,7 +436,7 @@ mod tests {
     #[test]
     fn remove_on_dead() {
         let mut world = World::new();
-        let e = world.spawn();
+        let e = world.spawn().id();
         world.insert_component(e, 10_u32).unwrap_none();
         world.despawn(e);
         world.remove_component::<u32>(e).unwrap_none();

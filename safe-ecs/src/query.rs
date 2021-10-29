@@ -277,10 +277,10 @@ mod tests {
     #[test]
     fn simple_query() {
         let mut world = World::new();
-        let e1 = world.spawn();
+        let e1 = world.spawn().id();
         world.insert_component(e1, 10_u32);
         world.insert_component(e1, 12_u64);
-        let e2 = world.spawn();
+        let e2 = world.spawn().id();
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
@@ -292,10 +292,10 @@ mod tests {
     #[test]
     fn tuple_query() {
         let mut world = World::new();
-        let e1 = world.spawn();
+        let e1 = world.spawn().id();
         world.insert_component(e1, 10_u32);
         world.insert_component(e1, 12_u64);
-        let e2 = world.spawn();
+        let e2 = world.spawn().id();
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
@@ -307,10 +307,10 @@ mod tests {
     #[test]
     fn maybe_query() {
         let mut world = World::new();
-        let e1 = world.spawn();
+        let e1 = world.spawn().id();
         world.insert_component(e1, 10_u32);
         world.insert_component(e1, 12_u64);
-        let e2 = world.spawn();
+        let e2 = world.spawn().id();
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
