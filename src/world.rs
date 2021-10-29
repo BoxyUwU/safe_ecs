@@ -124,24 +124,21 @@ impl World {
         let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
         let archetype = &self.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = *archetype.column_indices.get(&TypeId::of::<T>()).unwrap();
+        let column_idx = archetype.column_indices[&TypeId::of::<T>()];
         Some(cell::Ref::map(self.get_column::<T>(column_idx), |col| {
             &col.as_vec::<T>().unwrap()[entity_idx]
         }))
     }
 
-    pub fn get_component_mut<T: Component>(&mut self, entity: Entity) -> Option<cell::RefMut<T>> {
+    pub fn get_component_mut<T: Component>(&self, entity: Entity) -> Option<cell::RefMut<T>> {
         if self.has_component::<T>(entity)? == false {
             return None;
         }
 
         let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
-        let archetype = &mut self.archetypes[archetype_id];
+        let archetype = &self.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = *archetype
-            .column_indices
-            .get_mut(&TypeId::of::<T>())
-            .unwrap();
+        let column_idx = archetype.column_indices[&TypeId::of::<T>()];
         Some(cell::RefMut::map(
             self.get_column_mut::<T>(column_idx),
             |vec| &mut vec.as_vec_mut::<T>().unwrap()[entity_idx],
@@ -245,7 +242,7 @@ impl World {
         })
     }
 
-    fn get_column_mut<T: Component>(&mut self, column_idx: usize) -> cell::RefMut<'_, dyn Storage> {
+    fn get_column_mut<T: Component>(&self, column_idx: usize) -> cell::RefMut<'_, dyn Storage> {
         cell::RefMut::map(self.columns[&TypeId::of::<T>()].borrow_mut(), |vec| {
             &mut *vec[column_idx]
         })
