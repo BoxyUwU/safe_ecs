@@ -5,8 +5,9 @@ mod query;
 mod system;
 mod world;
 
-pub use query::{Maybe, QueryBorrows, QueryIter};
+pub use query::{Maybe, Query, QueryIter};
 pub use safe_ecs_derive::Component;
+pub use system::{Access, System, SystemParam, ToSystem};
 pub use world::{Component, Entity, EntityBuilder, World};
 
 pub(crate) mod sealed {

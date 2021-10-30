@@ -1,6 +1,6 @@
 use std::{any::TypeId, collections::HashSet, marker::PhantomData};
 
-use crate::{query::QueryParam, QueryBorrows, World};
+use crate::{query::QueryParam, Query, World};
 
 pub struct Access {
     read: HashSet<TypeId>,
@@ -53,18 +53,17 @@ impl Access {
     }
 }
 
-trait SystemParam {
+pub trait SystemParam {
     type SelfCtor<'b>;
     fn from_world(world: &World) -> Self::SelfCtor<'_>;
     fn get_access() -> Result<Access, ()>;
 }
 
-struct Query<'a, Q: QueryParam + 'static>(QueryBorrows<'a, Q>);
 impl<'a, Q: QueryParam> SystemParam for Query<'a, Q> {
     type SelfCtor<'b> = Query<'b, Q>;
 
     fn from_world(world: &World) -> Self::SelfCtor<'_> {
-        Query(world.query::<Q>())
+        world.query::<Q>()
     }
 
     fn get_access() -> Result<Access, ()> {
@@ -97,7 +96,7 @@ system_param_tuple_impl!(A B C);
 system_param_tuple_impl!(A B);
 system_param_tuple_impl!(A);
 
-trait System {
+pub trait System {
     fn run(&mut self, world: &World);
     fn get_access(&self) -> Result<Access, ()>;
 }
@@ -106,7 +105,7 @@ struct FunctionSystem<In, Func>(Func, PhantomData<fn(In)>)
 where
     Self: System;
 
-trait ToSystem<In> {
+pub trait ToSystem<In> {
     fn system(self) -> Box<dyn System>;
 }
 
@@ -153,7 +152,7 @@ fn foo() {
         sys.run(world);
     }
     fn query(mut q: Query<&u64>) {
-        for int in &mut q.0 {
+        for int in &mut q {
             dbg!(int);
         }
     }

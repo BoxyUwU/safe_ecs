@@ -234,13 +234,13 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
     }
 }
 
-pub struct QueryBorrows<'a, Q: QueryParam>(pub(crate) &'a World, pub(crate) Q::Lock<'a>);
-impl<'b, Q: QueryParam> QueryBorrows<'b, Q> {
+pub struct Query<'a, Q: QueryParam + 'static>(pub(crate) &'a World, pub(crate) Q::Lock<'a>);
+impl<'b, Q: QueryParam> Query<'b, Q> {
     pub fn iter_mut(&mut self) -> QueryIter<'_, 'b, Q> {
         QueryIter::new(self)
     }
 }
-impl<'a, 'b: 'a, Q: QueryParam> IntoIterator for &'a mut QueryBorrows<'b, Q> {
+impl<'a, 'b: 'a, Q: QueryParam> IntoIterator for &'a mut Query<'b, Q> {
     type Item = Q::Item<'a>;
     type IntoIter = QueryIter<'a, 'b, Q>;
 
@@ -257,7 +257,7 @@ pub struct QueryIter<'a, 'b: 'a, Q: QueryParam> {
 
 type ArchetypeIter<'b, Q> = impl Iterator<Item = &'b Archetype> + 'b;
 impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
-    fn new(borrows: &'a mut QueryBorrows<'b, Q>) -> Self {
+    fn new(borrows: &'a mut Query<'b, Q>) -> Self {
         fn defining_use<'b, Q: QueryParam>(world: &'b World) -> ArchetypeIter<'b, Q> {
             world
                 .archetypes

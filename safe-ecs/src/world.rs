@@ -225,9 +225,9 @@ impl World {
         None
     }
 
-    pub fn query<Q: query::QueryParam>(&self) -> query::QueryBorrows<'_, Q> {
+    pub fn query<Q: query::QueryParam>(&self) -> query::Query<'_, Q> {
         // FIXME panic from locks
-        query::QueryBorrows(self, Q::lock_from_world(self))
+        query::Query(self, Q::lock_from_world(self))
     }
 }
 
