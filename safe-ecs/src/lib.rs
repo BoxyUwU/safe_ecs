@@ -2,11 +2,12 @@
 #![feature(type_alias_impl_trait, generic_associated_types)]
 
 mod query;
+mod system;
 mod world;
 
 pub use query::{Maybe, QueryBorrows, QueryIter};
 pub use safe_ecs_derive::Component;
-pub use world::{Component, Entity, World};
+pub use world::{Component, Entity, EntityBuilder, World};
 
 pub(crate) mod sealed {
     pub trait Sealed {}

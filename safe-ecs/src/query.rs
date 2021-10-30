@@ -1,11 +1,12 @@
 use crate::{
     sealed,
+    system::Access,
     world::{Archetype, Storage},
     Component, Entity, World,
 };
 use std::{any::TypeId, cell, marker::PhantomData};
 
-pub trait QueryParam: sealed::Sealed {
+pub trait QueryParam: sealed::Sealed + 'static {
     type Lock<'a>;
     type LockBorrow<'a>;
     type Item<'a>;
@@ -18,6 +19,7 @@ pub trait QueryParam: sealed::Sealed {
         lock_borrow: &mut Self::LockBorrow<'a>,
     ) -> Self::ItemIter<'a>;
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>>;
+    fn get_access() -> Result<Access, ()>;
 }
 
 impl sealed::Sealed for Entity {}
@@ -40,6 +42,9 @@ impl QueryParam for Entity {
     }
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
         iter.next().copied()
+    }
+    fn get_access() -> Result<Access, ()> {
+        Ok(Access::new())
     }
 }
 
@@ -73,6 +78,10 @@ impl<T: Component> QueryParam for &'static T {
 
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
         iter.next()
+    }
+
+    fn get_access() -> Result<Access, ()> {
+        Access::new().insert_read(TypeId::of::<T>())
     }
 }
 
@@ -118,6 +127,10 @@ impl<T: Component> QueryParam for &'static mut T {
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
         iter.next()
     }
+
+    fn get_access() -> Result<Access, ()> {
+        Access::new().insert_write(TypeId::of::<T>())
+    }
 }
 
 macro_rules! query_param_tuple_impl {
@@ -153,6 +166,10 @@ macro_rules! query_param_tuple_impl {
             fn advance_iter<'a>(iters: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
                 let ($($T,)+) = iters;
                 Some(($($T::advance_iter($T)?,)+))
+            }
+
+            fn get_access() -> Result<Access, ()> {
+                Access::from_array([$($T::get_access()),+])
             }
         }
     };
@@ -211,11 +228,15 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
             }
         }
     }
+
+    fn get_access() -> Result<Access, ()> {
+        Q::get_access()
+    }
 }
 
 pub struct QueryBorrows<'a, Q: QueryParam>(pub(crate) &'a World, pub(crate) Q::Lock<'a>);
 impl<'b, Q: QueryParam> QueryBorrows<'b, Q> {
-    fn iter_mut(&mut self) -> QueryIter<'_, 'b, Q> {
+    pub fn iter_mut(&mut self) -> QueryIter<'_, 'b, Q> {
         QueryIter::new(self)
     }
 }
