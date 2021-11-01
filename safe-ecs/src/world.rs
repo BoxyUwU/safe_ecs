@@ -229,6 +229,18 @@ impl World {
         // FIXME panic from locks
         query::Query(self, Q::lock_from_world(self))
     }
+
+    pub fn access_scope<Args, Func: crate::ToSystem<Args>>(&mut self, system: Func) {
+        let mut system = system.system();
+        system.run(self);
+    }
+
+    pub fn command_scope(&mut self, f: impl FnOnce(crate::Commands<'_>, &mut World)) {
+        let mut buffer = crate::CommandBuffer::new();
+        let cmds = crate::Commands(&mut buffer);
+        f(cmds, self);
+        buffer.apply(self);
+    }
 }
 
 fn get_two<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
@@ -336,6 +348,7 @@ impl World {
     }
 }
 
+// FIXME whats up with this and why no EntityMut or Ref
 pub struct EntityBuilder<'a> {
     entity: Entity,
     world: &'a mut World,

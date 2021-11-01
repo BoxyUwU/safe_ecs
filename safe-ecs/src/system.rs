@@ -55,19 +55,69 @@ impl Access {
 
 pub trait SystemParam {
     type SelfCtor<'b>;
-    fn from_world(world: &World) -> Self::SelfCtor<'_>;
+    type SystemParamState;
+    fn from_world<'a>(
+        world: &'a World,
+        state: &'a mut Self::SystemParamState,
+    ) -> Self::SelfCtor<'a>;
     fn get_access() -> Result<Access, ()>;
+    fn new_state() -> Self::SystemParamState;
+    fn system_finish_event(state: &mut Self::SystemParamState, world: &mut World);
 }
 
 impl<'a, Q: QueryParam> SystemParam for Query<'a, Q> {
     type SelfCtor<'b> = Query<'b, Q>;
+    type SystemParamState = ();
 
-    fn from_world(world: &World) -> Self::SelfCtor<'_> {
+    fn from_world<'b>(world: &'b World, _: &'b mut Self::SystemParamState) -> Self::SelfCtor<'b> {
         world.query::<Q>()
     }
 
     fn get_access() -> Result<Access, ()> {
         Q::get_access()
+    }
+
+    fn new_state() -> Self::SystemParamState {}
+
+    fn system_finish_event(_: &mut Self::SystemParamState, _: &mut World) {}
+}
+
+impl<'a> SystemParam for &'a World {
+    type SelfCtor<'b> = &'b World;
+    type SystemParamState = ();
+
+    fn from_world<'b>(world: &'b World, _: &'b mut Self::SystemParamState) -> Self::SelfCtor<'b> {
+        world
+    }
+
+    fn get_access() -> Result<Access, ()> {
+        Ok(Access::new())
+    }
+
+    fn new_state() -> Self::SystemParamState {}
+
+    fn system_finish_event(_: &mut Self::SystemParamState, _: &mut World) {}
+}
+
+use crate::{CommandBuffer, Commands};
+impl<'a> SystemParam for Commands<'a> {
+    type SelfCtor<'b> = Commands<'b>;
+    type SystemParamState = CommandBuffer;
+
+    fn from_world<'b>(_: &'b World, state: &'b mut Self::SystemParamState) -> Self::SelfCtor<'b> {
+        Commands(state)
+    }
+
+    fn get_access() -> Result<Access, ()> {
+        Ok(Access::new())
+    }
+
+    fn new_state() -> Self::SystemParamState {
+        CommandBuffer::new()
+    }
+
+    fn system_finish_event(state: &mut Self::SystemParamState, world: &mut World) {
+        state.apply(world);
     }
 }
 
@@ -75,13 +125,26 @@ macro_rules! system_param_tuple_impl {
     ($($T:ident)+) => {
         impl<$($T: SystemParam),+> SystemParam for ($($T,)+) {
             type SelfCtor<'b> = ($($T::SelfCtor<'b>,)+);
+            type SystemParamState = ($($T::SystemParamState,)+);
 
-            fn from_world(world: &World) -> Self::SelfCtor<'_> {
-                ($($T::from_world(world),)+)
+            #[allow(non_snake_case)]
+            fn from_world<'a>(world: &'a World, state: &'a mut Self::SystemParamState) -> Self::SelfCtor<'a> {
+                let ($($T,)+) = state;
+                ($($T::from_world(world, $T),)+)
             }
 
             fn get_access() -> Result<Access, ()> {
                 Access::from_array([$($T::get_access()),+])
+            }
+
+            fn new_state() -> Self::SystemParamState {
+                ($($T::new_state(),)+)
+            }
+
+            #[allow(non_snake_case)]
+            fn system_finish_event(state: &mut Self::SystemParamState, world: &mut World) {
+                let ($($T,)+) = state;
+                $($T::system_finish_event($T, world);)+
             }
         }
     };
@@ -97,11 +160,11 @@ system_param_tuple_impl!(A B);
 system_param_tuple_impl!(A);
 
 pub trait System {
-    fn run(&mut self, world: &World);
+    fn run(&mut self, world: &mut World);
     fn get_access(&self) -> Result<Access, ()>;
 }
 
-struct FunctionSystem<In, Func>(Func, PhantomData<fn(In)>)
+struct FunctionSystem<State, In, Func>(State, Func, PhantomData<fn(In)>)
 where
     Self: System;
 
@@ -111,13 +174,17 @@ pub trait ToSystem<In> {
 
 macro_rules! system_impl {
     ($($T:ident)+) => {
-        impl<Func, $($T: SystemParam,)+> System for FunctionSystem<($($T,)+), Func>
+        impl<Func, $($T: SystemParam,)+> System for FunctionSystem<($($T::SystemParamState,)+), ($($T,)+), Func>
         where
             for<'a> &'a mut Func: FnMut($($T,)+),
             for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+), {
-                fn run(&mut self, world: &World) {
+                #[allow(non_snake_case)]
+                fn run(&mut self, world: &mut World) {
                     let this = self;
-                    (&mut &mut this.0)($($T::from_world(world),)+)
+                    let ($($T,)+) = &mut this.0;
+                    (&mut &mut this.1)($($T::from_world(world, $T),)+);
+                    // FIXME move this to a separate fn so this one doesnt need `&mut World`
+                    $($T::system_finish_event($T, world);)+
                 }
 
                 fn get_access(&self) -> Result<Access, ()> {
@@ -130,7 +197,7 @@ macro_rules! system_impl {
             for<'a> &'a mut Func: FnMut($($T,)+),
             for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+), {
             fn system(self) -> Box<dyn System> {
-                Box::new(FunctionSystem(self, PhantomData))
+                Box::new(FunctionSystem::<($($T::SystemParamState,)+), _, _>(($($T::new_state(),)+), self, PhantomData))
             }
         }
     };
@@ -145,19 +212,29 @@ system_impl!(A B C);
 system_impl!(A B);
 system_impl!(A);
 
-#[test]
-fn foo() {
-    fn takes_sys<In, T: ToSystem<In>>(s: T, world: &World) {
-        let mut sys = T::system(s);
-        sys.run(world);
-    }
-    fn query(mut q: Query<&u64>) {
-        for int in &mut q {
-            dbg!(int);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_into_sys() {
+        fn takes_sys<In, T: ToSystem<In>>(s: T, world: &mut World) {
+            let mut sys = T::system(s);
+            sys.run(world);
         }
+        fn query(mut q: Query<&u64>, _c: Commands) {
+            for _ in &mut q {}
+        }
+        let mut world = World::new();
+        world.spawn().insert(10_u64);
+        takes_sys(query, &mut world);
     }
-    let mut world = World::new();
-    world.spawn().insert(10_u64);
-    takes_sys(query, &world);
-    takes_sys(|_: Query<&u32>, _: Query<&u64>| todo!(), &world);
+
+    #[test]
+    fn params() {
+        // FIXME: panics
+        fn query(_: Query<&u64>, _: Commands, _: &World) {}
+        let mut world = World::new();
+        world.access_scope(query);
+    }
 }
