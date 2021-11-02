@@ -235,7 +235,6 @@ mod tests {
 
     #[test]
     fn params() {
-        // FIXME: panics
         fn query(_: Query<&u64>, _: Commands, _: &World) {}
         let mut world = World::new();
         world.access_scope(query);

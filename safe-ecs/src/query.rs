@@ -11,7 +11,7 @@ pub trait QueryParam: sealed::Sealed + 'static {
     type LockBorrow<'a>;
     type Item<'a>;
     type ItemIter<'a>;
-    fn lock_from_world(world: &World) -> Self::Lock<'_>;
+    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>>;
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a>;
     fn archetype_matches(archetype: &Archetype) -> bool;
     fn item_iter_from_archetype<'a>(
@@ -29,7 +29,9 @@ impl QueryParam for Entity {
     type Item<'a> = Entity;
     type ItemIter<'a> = std::slice::Iter<'a, Entity>;
 
-    fn lock_from_world(_: &World) -> Self::Lock<'_> {}
+    fn lock_from_world(_: &World) -> Option<Self::Lock<'_>> {
+        Some(())
+    }
     fn lock_borrows_from_locks<'a, 'b>(_: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {}
     fn archetype_matches(_: &Archetype) -> bool {
         true
@@ -55,9 +57,9 @@ impl<T: Component> QueryParam for &'static T {
     type Item<'a> = &'a T;
     type ItemIter<'a> = std::slice::Iter<'a, T>;
 
-    fn lock_from_world(world: &World) -> Self::Lock<'_> {
-        // FIXME, two panics
-        (world.columns[&TypeId::of::<T>()]).borrow()
+    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
+        // FIXME, borrow panic
+        Some((world.columns.get(&TypeId::of::<T>())?).borrow())
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
@@ -92,9 +94,9 @@ impl<T: Component> QueryParam for &'static mut T {
     type Item<'a> = &'a mut T;
     type ItemIter<'a> = std::slice::IterMut<'a, T>;
 
-    fn lock_from_world(world: &World) -> Self::Lock<'_> {
-        // FIXME, two panics
-        (world.columns[&TypeId::of::<T>()]).borrow_mut()
+    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
+        // FIXME, borrow panic
+        Some((world.columns.get(&TypeId::of::<T>())?).borrow_mut())
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
@@ -142,8 +144,8 @@ macro_rules! query_param_tuple_impl {
             type Item<'a> = ($($T::Item<'a>,)+);
             type ItemIter<'a> = ($($T::ItemIter<'a>,)+);
 
-            fn lock_from_world(world: &World) -> Self::Lock<'_> {
-                ($($T::lock_from_world(world),)+)
+            fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
+                Some(($($T::lock_from_world(world)?,)+))
             }
 
             #[allow(non_snake_case)]
@@ -196,7 +198,7 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
     type Item<'a> = Option<Q::Item<'a>>;
     type ItemIter<'a> = MaybeIter<'a, Q>;
 
-    fn lock_from_world(world: &World) -> Self::Lock<'_> {
+    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
         Q::lock_from_world(world)
     }
 
@@ -234,7 +236,7 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
     }
 }
 
-pub struct Query<'a, Q: QueryParam + 'static>(pub(crate) &'a World, pub(crate) Q::Lock<'a>);
+pub struct Query<'a, Q: QueryParam + 'static>(pub(crate) &'a World, pub(crate) Option<Q::Lock<'a>>);
 impl<'b, Q: QueryParam> Query<'b, Q> {
     pub fn iter_mut(&mut self) -> QueryIter<'_, 'b, Q> {
         QueryIter::new(self)
@@ -250,7 +252,9 @@ impl<'a, 'b: 'a, Q: QueryParam> IntoIterator for &'a mut Query<'b, Q> {
 }
 
 pub struct QueryIter<'a, 'b: 'a, Q: QueryParam> {
-    borrows: Q::LockBorrow<'a>,
+    /// `None` if we couldnt acquire the locks because
+    /// one of the columns had not been created yet
+    borrows: Option<Q::LockBorrow<'a>>,
     archetype_iter: ArchetypeIter<'b, Q>,
     item_iters: Option<Q::ItemIter<'a>>,
 }
@@ -267,7 +271,10 @@ impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
 
         Self {
             archetype_iter: defining_use::<Q>(borrows.0),
-            borrows: Q::lock_borrows_from_locks(&mut borrows.1),
+            borrows: borrows
+                .1
+                .as_mut()
+                .map(|locks| Q::lock_borrows_from_locks(locks)),
             item_iters: None,
         }
     }
@@ -276,10 +283,11 @@ impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
 impl<'a, 'b: 'a, Q: QueryParam> Iterator for QueryIter<'a, 'b, Q> {
     type Item = Q::Item<'a>;
     fn next(&mut self) -> Option<Self::Item> {
+        let borrows = self.borrows.as_mut()?;
         loop {
             if let None = &self.item_iters {
                 let archetype = self.archetype_iter.next()?;
-                self.item_iters = Some(Q::item_iter_from_archetype(archetype, &mut self.borrows));
+                self.item_iters = Some(Q::item_iter_from_archetype(archetype, borrows));
             }
 
             match Q::advance_iter(self.item_iters.as_mut().unwrap()) {
