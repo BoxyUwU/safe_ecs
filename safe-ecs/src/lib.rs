@@ -2,17 +2,19 @@
 #![feature(type_alias_impl_trait, generic_associated_types)]
 
 mod commands;
+mod entities;
 mod query;
 mod scope;
 mod system;
 mod world;
 
 pub use commands::{Command, CommandBuffer, Commands, CommandsWithEntity};
+pub use entities::Entity;
 pub use query::{Maybe, Query, QueryIter};
 pub use safe_ecs_derive::Component;
 pub use scope::Scope;
 pub use system::{Access, System, SystemParam, ToSystem};
-pub use world::{Component, Entity, EntityBuilder, World};
+pub use world::{Component, EntityBuilder, World};
 
 pub(crate) mod sealed {
     pub trait Sealed {}

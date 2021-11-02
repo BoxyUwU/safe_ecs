@@ -4,7 +4,10 @@ use std::{
     collections::HashMap,
 };
 
-use crate::{query, sealed};
+use crate::{
+    entities::{Entities, Entity, EntityMeta},
+    query, sealed,
+};
 
 pub trait Component: 'static {}
 pub trait Storage: sealed::Sealed + 'static {
@@ -12,6 +15,7 @@ pub trait Storage: sealed::Sealed + 'static {
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn empty_of_same_type(&self) -> Box<dyn Storage>;
     fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize);
+    fn swap_remove_and_drop(&mut self, idx: usize);
 }
 
 impl<T: Component> sealed::Sealed for Vec<T> {}
@@ -32,6 +36,10 @@ impl<T: Component> Storage for Vec<T> {
         let other = other.as_vec_mut::<T>().unwrap();
         other.push(self.swap_remove(idx));
     }
+
+    fn swap_remove_and_drop(&mut self, idx: usize) {
+        self.swap_remove(idx);
+    }
 }
 
 impl dyn Storage {
@@ -48,13 +56,6 @@ impl dyn Storage {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
-pub struct Entity(usize);
-
-pub(crate) struct EntityMeta {
-    archetype: usize,
-}
-
 pub struct Archetype {
     pub(crate) entities: Vec<Entity>,
     pub(crate) column_indices: HashMap<TypeId, usize>,
@@ -67,7 +68,7 @@ impl Archetype {
 }
 
 pub struct World {
-    pub(crate) entity_meta: Vec<Option<EntityMeta>>,
+    pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
     pub(crate) columns: HashMap<TypeId, RefCell<Vec<Box<dyn Storage>>>>,
 }
@@ -75,7 +76,7 @@ pub struct World {
 impl World {
     pub fn new() -> World {
         World {
-            entity_meta: vec![],
+            entities: Entities::new(),
             archetypes: vec![Archetype {
                 entities: vec![],
                 column_indices: HashMap::new(),
@@ -85,18 +86,15 @@ impl World {
     }
 
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.entity_meta
-            .get(entity.0)
-            .map(|meta| meta.is_some())
-            .unwrap_or(false)
+        self.entities.is_alive(entity)
     }
 
     pub fn spawn(&mut self) -> EntityBuilder<'_> {
-        let id = self.entity_meta.len();
-        self.entity_meta.push(Some(EntityMeta { archetype: 0 }));
-        self.archetypes[0].entities.push(Entity(id));
+        let entity = self.entities.spawn(|entity| {
+            self.archetypes[0].entities.push(entity);
+        });
         EntityBuilder {
-            entity: Entity(id),
+            entity,
             world: self,
         }
     }
@@ -109,13 +107,22 @@ impl World {
     }
 
     pub fn despawn(&mut self, entity: Entity) {
-        if self.is_alive(entity) {
-            self.entity_meta[entity.0] = None;
-        }
+        self.entities
+            .fix_reserved_entities(|reserved| self.archetypes[0].entities.push(reserved))
+            .despawn(entity, |meta| {
+                let archetype = &mut self.archetypes[meta.archetype];
+                let entity_idx = archetype.get_entity_idx(entity).unwrap();
+                archetype.entities.swap_remove(entity_idx);
+
+                for (ty_id, column_idx) in archetype.column_indices.iter() {
+                    RefCell::get_mut(&mut self.columns.get_mut(ty_id).unwrap())[*column_idx]
+                        .swap_remove_and_drop(entity_idx);
+                }
+            });
     }
 
     pub fn has_component<T: Component>(&self, entity: Entity) -> Option<bool> {
-        let archetype = self.entity_meta[entity.0].as_ref()?.archetype;
+        let archetype = self.entities.meta(entity)?.archetype;
         Some(
             self.archetypes[archetype]
                 .column_indices
@@ -129,7 +136,7 @@ impl World {
             return None;
         }
 
-        let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
         let archetype = &self.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_indices[&TypeId::of::<T>()];
@@ -143,7 +150,7 @@ impl World {
             return None;
         }
 
-        let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
         let archetype = &self.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_indices[&TypeId::of::<T>()];
@@ -158,11 +165,11 @@ impl World {
             return None;
         }
 
-        let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
         let new_archetype_id = self.get_or_insert_archetype_from_remove::<T>(archetype_id);
-        self.entity_meta[entity.0] = Some(EntityMeta {
+        *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
-        });
+        };
         let (old_archetype, new_archetype) =
             get_two(&mut self.archetypes, archetype_id, new_archetype_id);
 
@@ -198,11 +205,11 @@ impl World {
             return Some(std::mem::replace(&mut *old_component, component));
         }
 
-        let archetype_id = self.entity_meta[entity.0].as_ref().unwrap().archetype;
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
         let new_archetype_id = self.get_or_insert_archetype_from_insert::<T>(archetype_id);
-        self.entity_meta[entity.0] = Some(EntityMeta {
+        *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
-        });
+        };
         let (old_archetype, new_archetype) =
             get_two(&mut self.archetypes, archetype_id, new_archetype_id);
 

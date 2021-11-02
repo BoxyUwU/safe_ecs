@@ -345,4 +345,14 @@ mod tests {
             ],
         )
     }
+
+    #[test]
+    fn query_with_despawned() {
+        let mut world = World::new();
+        let e1 = world.spawn().insert(10_u32).id();
+        world.despawn(e1);
+
+        let mut q = world.query::<&u32>();
+        q.iter_mut().for_each(|_| unreachable!());
+    }
 }
