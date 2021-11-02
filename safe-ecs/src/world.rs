@@ -241,24 +241,22 @@ impl World {
         let mut system = system.system();
         system.run(self);
     }
-
-    pub fn command_scope(&mut self, f: impl FnOnce(crate::Commands<'_>, &mut World)) {
-        let mut buffer = crate::CommandBuffer::new();
-        let cmds = crate::Commands(&mut buffer);
-        f(cmds, self);
-        buffer.apply(self);
-    }
 }
 
 fn get_two<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
-    if idx_1 < idx_2 {
-        let (left, right) = vec.split_at_mut(idx_2);
-        (&mut left[idx_1], &mut right[0])
-    } else if idx_1 > idx_2 {
-        let (left, right) = vec.split_at_mut(idx_1);
-        (&mut right[0], &mut left[idx_2])
-    } else {
-        panic!("")
+    use std::cmp::Ordering;
+    match idx_1.cmp(&idx_2) {
+        Ordering::Less => {
+            let (left, right) = vec.split_at_mut(idx_2);
+            (&mut left[idx_1], &mut right[0])
+        }
+        Ordering::Greater => {
+            let (left, right) = vec.split_at_mut(idx_1);
+            (&mut right[0], &mut left[idx_2])
+        }
+        Ordering::Equal => {
+            panic!("")
+        }
     }
 }
 

@@ -104,8 +104,11 @@ impl<'a> SystemParam for Commands<'a> {
     type SelfCtor<'b> = Commands<'b>;
     type SystemParamState = CommandBuffer;
 
-    fn from_world<'b>(_: &'b World, state: &'b mut Self::SystemParamState) -> Self::SelfCtor<'b> {
-        Commands(state)
+    fn from_world<'b>(
+        world: &'b World,
+        state: &'b mut Self::SystemParamState,
+    ) -> Self::SelfCtor<'b> {
+        Commands(state, world)
     }
 
     fn get_access() -> Result<Access, ()> {
