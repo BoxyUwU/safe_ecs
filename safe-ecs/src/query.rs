@@ -217,17 +217,18 @@ pub enum MaybeIter<'a, Q: QueryParam> {
     None(usize),
 }
 impl<Q: QueryParam> QueryParam for Maybe<Q> {
-    type Lock<'a> = Q::Lock<'a>;
-    type LockBorrow<'a> = Q::LockBorrow<'a>;
+    type Lock<'a> = Option<Q::Lock<'a>>;
+    type LockBorrow<'a> = Option<Q::LockBorrow<'a>>;
     type Item<'a> = Option<Q::Item<'a>>;
     type ItemIter<'a> = MaybeIter<'a, Q>;
 
     fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
-        Q::lock_from_world(world)
+        Ok(Some(Q::lock_from_world(world)?))
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
-        Q::lock_borrows_from_locks(lock)
+        lock.as_mut()
+            .map(|q_lock| Q::lock_borrows_from_locks(q_lock))
     }
 
     fn archetype_matches(_: &Archetype) -> bool {
@@ -239,7 +240,10 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
         lock_borrow: &mut Self::LockBorrow<'a>,
     ) -> Self::ItemIter<'a> {
         match Q::archetype_matches(archetype) {
-            true => MaybeIter::Some(Q::item_iter_from_archetype(archetype, lock_borrow)),
+            true => MaybeIter::Some(Q::item_iter_from_archetype(
+                archetype,
+                lock_borrow.as_mut().unwrap(),
+            )),
             false => MaybeIter::None(archetype.entities.len()),
         }
     }
@@ -405,7 +409,6 @@ mod tests {
         let _q3 = world.query::<&u32>().unwrap();
     }
 
-    // FIXME: fails
     #[test]
     fn maybe_on_uncreated_column() {
         let mut world = World::new();
