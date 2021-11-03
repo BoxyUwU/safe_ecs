@@ -416,5 +416,18 @@ mod tests {
         let mut q = world.query::<Maybe<&u32>>().unwrap();
         let mut iter = q.iter_mut();
         assert_eq!(iter.next(), Some(None));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn complex_maybe_query() {
+        let mut world = World::new();
+        let e1 = world.spawn().insert(10_u32).id();
+        let e2 = world.spawn().insert(12_u32).id();
+        let mut q = world.query::<(Entity, Maybe<&u64>, &u32)>().unwrap();
+        let mut iter = q.iter_mut();
+        assert_eq!(iter.next(), Some((e1, None, &10_u32)));
+        assert_eq!(iter.next(), Some((e2, None, &12_u32)));
+        assert_eq!(iter.next(), None);
     }
 }
