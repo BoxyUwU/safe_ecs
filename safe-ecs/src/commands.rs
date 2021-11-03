@@ -88,10 +88,10 @@ mod tests {
         world.access_scope(move |mut cmds: Commands| {
             cmds.entity(e).insert(10_u32).insert(12_u64).remove::<u32>();
         });
-        let mut q = world.query::<&u32>();
+        let mut q = world.query::<&u32>().unwrap();
         let mut iter = q.iter_mut();
         assert_eq!(iter.next(), None);
-        let mut q = world.query::<&u64>();
+        let mut q = world.query::<&u64>().unwrap();
         let mut iter = q.iter_mut();
         assert_eq!(iter.next(), Some(&12));
         assert_eq!(iter.next(), None);
@@ -105,10 +105,10 @@ mod tests {
             cmds.spawn().insert(10_u32).insert(12_u64).remove::<u32>();
         });
 
-        let mut q = world.query::<&u32>();
+        let mut q = world.query::<&u32>().unwrap();
         let mut iter = q.iter_mut();
         assert_eq!(iter.next(), None);
-        let mut q = world.query::<&u64>();
+        let mut q = world.query::<&u64>().unwrap();
         let mut iter = q.iter_mut();
         assert_eq!(iter.next(), Some(&12));
         assert_eq!(iter.next(), None);

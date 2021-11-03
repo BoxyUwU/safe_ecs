@@ -16,6 +16,11 @@ pub use scope::Scope;
 pub use system::{Access, System, SystemParam, ToSystem};
 pub use world::{Component, EntityBuilder, World};
 
+pub mod errors {
+    #[derive(Debug, Copy, Clone)]
+    pub struct WorldBorrowError(pub &'static str);
+}
+
 pub(crate) mod sealed {
     pub trait Sealed {}
 }

@@ -1,17 +1,22 @@
 use crate::{
+    errors::WorldBorrowError,
     sealed,
     system::Access,
     world::{Archetype, Storage},
     Component, Entity, World,
 };
-use std::{any::TypeId, cell, marker::PhantomData};
+use std::{
+    any::{type_name, TypeId},
+    cell,
+    marker::PhantomData,
+};
 
 pub trait QueryParam: sealed::Sealed + 'static {
     type Lock<'a>;
     type LockBorrow<'a>;
     type Item<'a>;
     type ItemIter<'a>;
-    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>>;
+    fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError>;
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a>;
     fn archetype_matches(archetype: &Archetype) -> bool;
     fn item_iter_from_archetype<'a>(
@@ -29,8 +34,8 @@ impl QueryParam for Entity {
     type Item<'a> = Entity;
     type ItemIter<'a> = std::slice::Iter<'a, Entity>;
 
-    fn lock_from_world(_: &World) -> Option<Self::Lock<'_>> {
-        Some(())
+    fn lock_from_world(_: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+        Ok(Some(()))
     }
     fn lock_borrows_from_locks<'a, 'b>(_: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {}
     fn archetype_matches(_: &Archetype) -> bool {
@@ -57,9 +62,15 @@ impl<T: Component> QueryParam for &'static T {
     type Item<'a> = &'a T;
     type ItemIter<'a> = std::slice::Iter<'a, T>;
 
-    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
-        // FIXME, borrow panic
-        Some((world.columns.get(&TypeId::of::<T>())?).borrow())
+    fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+        world
+            .columns
+            .get(&TypeId::of::<T>())
+            .map(|cell| {
+                cell.try_borrow()
+                    .map_err(|_| WorldBorrowError(type_name::<T>()))
+            })
+            .transpose()
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
@@ -94,9 +105,15 @@ impl<T: Component> QueryParam for &'static mut T {
     type Item<'a> = &'a mut T;
     type ItemIter<'a> = std::slice::IterMut<'a, T>;
 
-    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
-        // FIXME, borrow panic
-        Some((world.columns.get(&TypeId::of::<T>())?).borrow_mut())
+    fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+        world
+            .columns
+            .get(&TypeId::of::<T>())
+            .map(|cell| {
+                cell.try_borrow_mut()
+                    .map_err(|_| WorldBorrowError(type_name::<T>()))
+            })
+            .transpose()
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
@@ -144,8 +161,15 @@ macro_rules! query_param_tuple_impl {
             type Item<'a> = ($($T::Item<'a>,)+);
             type ItemIter<'a> = ($($T::ItemIter<'a>,)+);
 
-            fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
-                Some(($($T::lock_from_world(world)?,)+))
+            fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+                Ok(Some(
+                    ($(
+                        match $T::lock_from_world(world)? {
+                            None => return Ok(None),
+                            Some(lock) => lock,
+                        },
+                    )+)
+                ))
             }
 
             #[allow(non_snake_case)]
@@ -198,7 +222,7 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
     type Item<'a> = Option<Q::Item<'a>>;
     type ItemIter<'a> = MaybeIter<'a, Q>;
 
-    fn lock_from_world(world: &World) -> Option<Self::Lock<'_>> {
+    fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
         Q::lock_from_world(world)
     }
 
@@ -313,7 +337,7 @@ mod tests {
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
-        let mut q = world.query::<&u64>();
+        let mut q = world.query::<&u64>().unwrap();
         let returned = q.iter_mut().collect::<Vec<_>>();
         assert_eq!(returned.as_slice(), &[&12, &13]);
     }
@@ -328,7 +352,7 @@ mod tests {
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
-        let mut q = world.query::<(Entity, &u32, &u64)>();
+        let mut q = world.query::<(Entity, &u32, &u64)>().unwrap();
         let returned = q.iter_mut().collect::<Vec<_>>();
         assert_eq!(returned.as_slice(), &[(e1, &10, &12)]);
     }
@@ -343,7 +367,9 @@ mod tests {
         world.insert_component(e2, 13_u64);
         world.insert_component(e2, 9_u128);
 
-        let mut q = world.query::<(Entity, Maybe<&u32>, &u64, Maybe<&u128>)>();
+        let mut q = world
+            .query::<(Entity, Maybe<&u32>, &u64, Maybe<&u128>)>()
+            .unwrap();
         let returned = q.iter_mut().collect::<Vec<_>>();
         assert_eq!(
             returned.as_slice(),
@@ -360,7 +386,32 @@ mod tests {
         let e1 = world.spawn().insert(10_u32).id();
         world.despawn(e1);
 
-        let mut q = world.query::<&u32>();
-        q.iter_mut().for_each(|_| unreachable!());
+        let mut q = world.query::<&u32>().unwrap();
+        let mut iter = q.iter_mut();
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn conflicting_queries() {
+        let mut world = World::new();
+        let _e1 = world.spawn().insert(10_u32).insert(10_u64).id();
+
+        let _q1 = world.query::<&u32>().unwrap();
+        assert!(matches!(world.query::<&mut u32>(), Err(_)));
+
+        let _q2 = world.query::<&mut u64>().unwrap();
+        assert!(matches!(world.query::<(&u32, &mut u64)>(), Err(_)));
+
+        let _q3 = world.query::<&u32>().unwrap();
+    }
+
+    // FIXME: fails
+    #[test]
+    fn maybe_on_uncreated_column() {
+        let mut world = World::new();
+        let _e1 = world.spawn().id();
+        let mut q = world.query::<Maybe<&u32>>().unwrap();
+        let mut iter = q.iter_mut();
+        assert_eq!(iter.next(), Some(None));
     }
 }

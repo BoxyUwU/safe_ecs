@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     entities::{Entities, Entity, EntityMeta},
-    query, sealed,
+    errors, query, sealed,
 };
 
 pub trait Component: 'static {}
@@ -232,8 +232,10 @@ impl World {
         None
     }
 
-    pub fn query<Q: query::QueryParam>(&self) -> query::Query<'_, Q> {
-        query::Query(self, Q::lock_from_world(self))
+    pub fn query<Q: query::QueryParam>(
+        &self,
+    ) -> Result<query::Query<'_, Q>, errors::WorldBorrowError> {
+        Ok(query::Query(self, Q::lock_from_world(self)?))
     }
 
     pub fn access_scope<Args, Func: crate::ToSystem<Args>>(&mut self, system: Func) {

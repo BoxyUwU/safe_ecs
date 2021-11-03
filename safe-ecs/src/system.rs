@@ -1,6 +1,5 @@
+use crate::{errors, query::QueryParam, CommandBuffer, Commands, Query, World};
 use std::{any::TypeId, collections::HashSet, marker::PhantomData};
-
-use crate::{query::QueryParam, Query, World};
 
 pub struct Access {
     read: HashSet<TypeId>,
@@ -59,7 +58,7 @@ pub trait SystemParam {
     fn from_world<'a>(
         world: &'a World,
         state: &'a mut Self::SystemParamState,
-    ) -> Self::SelfCtor<'a>;
+    ) -> Result<Self::SelfCtor<'a>, errors::WorldBorrowError>;
     fn get_access() -> Result<Access, ()>;
     fn new_state() -> Self::SystemParamState;
     fn system_finish_event(state: &mut Self::SystemParamState, world: &mut World);
@@ -69,7 +68,10 @@ impl<'a, Q: QueryParam> SystemParam for Query<'a, Q> {
     type SelfCtor<'b> = Query<'b, Q>;
     type SystemParamState = ();
 
-    fn from_world<'b>(world: &'b World, _: &'b mut Self::SystemParamState) -> Self::SelfCtor<'b> {
+    fn from_world<'b>(
+        world: &'b World,
+        _: &'b mut Self::SystemParamState,
+    ) -> Result<Self::SelfCtor<'b>, errors::WorldBorrowError> {
         world.query::<Q>()
     }
 
@@ -86,8 +88,11 @@ impl<'a> SystemParam for &'a World {
     type SelfCtor<'b> = &'b World;
     type SystemParamState = ();
 
-    fn from_world<'b>(world: &'b World, _: &'b mut Self::SystemParamState) -> Self::SelfCtor<'b> {
-        world
+    fn from_world<'b>(
+        world: &'b World,
+        _: &'b mut Self::SystemParamState,
+    ) -> Result<Self::SelfCtor<'b>, errors::WorldBorrowError> {
+        Ok(world)
     }
 
     fn get_access() -> Result<Access, ()> {
@@ -99,7 +104,6 @@ impl<'a> SystemParam for &'a World {
     fn system_finish_event(_: &mut Self::SystemParamState, _: &mut World) {}
 }
 
-use crate::{CommandBuffer, Commands};
 impl<'a> SystemParam for Commands<'a> {
     type SelfCtor<'b> = Commands<'b>;
     type SystemParamState = CommandBuffer;
@@ -107,8 +111,8 @@ impl<'a> SystemParam for Commands<'a> {
     fn from_world<'b>(
         world: &'b World,
         state: &'b mut Self::SystemParamState,
-    ) -> Self::SelfCtor<'b> {
-        Commands(state, world)
+    ) -> Result<Self::SelfCtor<'b>, errors::WorldBorrowError> {
+        Ok(Commands(state, world))
     }
 
     fn get_access() -> Result<Access, ()> {
@@ -131,9 +135,12 @@ macro_rules! system_param_tuple_impl {
             type SystemParamState = ($($T::SystemParamState,)+);
 
             #[allow(non_snake_case)]
-            fn from_world<'a>(world: &'a World, state: &'a mut Self::SystemParamState) -> Self::SelfCtor<'a> {
+            fn from_world<'a>(
+                world: &'a World,
+                state: &'a mut Self::SystemParamState
+            ) -> Result<Self::SelfCtor<'a>, errors::WorldBorrowError> {
                 let ($($T,)+) = state;
-                ($($T::from_world(world, $T),)+)
+                Ok(($($T::from_world(world, $T)?,)+))
             }
 
             fn get_access() -> Result<Access, ()> {
@@ -185,7 +192,8 @@ macro_rules! system_impl {
                 fn run(&mut self, world: &mut World) {
                     let this = self;
                     let ($($T,)+) = &mut this.0;
-                    (&mut &mut this.1)($($T::from_world(world, $T),)+);
+                    // FIXME unwrap
+                    (&mut &mut this.1)($($T::from_world(world, $T).unwrap(),)+);
                     // FIXME move this to a separate fn so this one doesnt need `&mut World`
                     $($T::system_finish_event($T, world);)+
                 }
