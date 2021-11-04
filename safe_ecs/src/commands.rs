@@ -84,8 +84,7 @@ mod tests {
     fn basic_insert() {
         let mut world = World::new();
         let e = world.spawn().id();
-        // FIXME non 'static systems just for access scope lol
-        world.access_scope(move |mut cmds: Commands| {
+        world.access_scope(|mut cmds: Commands| {
             cmds.entity(e).insert(10_u32).insert(12_u64).remove::<u32>();
         });
         let mut q = world.query::<&u32>().unwrap();

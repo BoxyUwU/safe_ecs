@@ -180,7 +180,9 @@ where
     Self: System;
 
 pub trait ToSystem<In, Out> {
-    fn system(self) -> Box<dyn System<Out = Out>>;
+    fn system<'a>(self) -> Box<dyn System<Out = Out> + 'a>
+    where
+        Self: 'a;
 }
 
 macro_rules! system_impl {
@@ -205,11 +207,12 @@ macro_rules! system_impl {
                 }
             }
 
-        impl<Out, Func: 'static, $($T: SystemParam + 'static,)+> ToSystem<($($T,)+), Out> for Func
+        impl<Out, Func, $($T: SystemParam + 'static,)+> ToSystem<($($T,)+), Out> for Func
         where
             for<'a> &'a mut Func: FnMut($($T,)+) -> Out,
             for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+) -> Out, {
-            fn system(self) -> Box<dyn System<Out = Out>> {
+            fn system<'a>(self) -> Box<dyn System<Out = Out> + 'a>
+            where Self: 'a {
                 Box::new(FunctionSystem::<($($T::SystemParamState,)+), _, _>(($($T::new_state(),)+), self, PhantomData))
             }
         }
