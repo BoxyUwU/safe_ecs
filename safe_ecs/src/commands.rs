@@ -71,8 +71,8 @@ impl CommandsWithEntity<'_, '_> {
         self
     }
 
-    pub fn id(&mut self) -> (Entity, &mut Self) {
-        (self.1, self)
+    pub fn id(&mut self) -> Entity {
+        self.1
     }
 }
 
@@ -100,17 +100,20 @@ mod tests {
     #[test]
     fn spawn() {
         let mut world = World::new();
-        // FIXME allow to return stuff..?
-        world.access_scope(|mut cmds: Commands| {
-            cmds.spawn().insert(10_u32).insert(12_u64).remove::<u32>();
+        let e1 = world.access_scope(|mut cmds: Commands| {
+            cmds.spawn()
+                .insert(10_u32)
+                .insert(12_u64)
+                .remove::<u32>()
+                .id()
         });
 
-        let mut q = world.query::<&u32>().unwrap();
+        let mut q = world.query::<(Entity, &u32)>().unwrap();
         let mut iter = q.iter_mut();
         assert_eq!(iter.next(), None);
-        let mut q = world.query::<&u64>().unwrap();
+        let mut q = world.query::<(Entity, &u64)>().unwrap();
         let mut iter = q.iter_mut();
-        assert_eq!(iter.next(), Some(&12));
+        assert_eq!(iter.next(), Some((e1, &12)));
         assert_eq!(iter.next(), None);
     }
 }

@@ -238,9 +238,12 @@ impl World {
         Ok(query::Query(self, Q::lock_from_world(self)?))
     }
 
-    pub fn access_scope<Args, Func: crate::ToSystem<Args>>(&mut self, system: Func) {
+    pub fn access_scope<Out, Args, Func: crate::ToSystem<Args, Out>>(
+        &mut self,
+        system: Func,
+    ) -> Out {
         let mut system = system.system();
-        system.run(self);
+        system.run(self)
     }
 }
 

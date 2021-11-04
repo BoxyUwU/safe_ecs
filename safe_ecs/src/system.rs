@@ -170,7 +170,8 @@ system_param_tuple_impl!(A B);
 system_param_tuple_impl!(A);
 
 pub trait System {
-    fn run(&mut self, world: &mut World);
+    type Out;
+    fn run(&mut self, world: &mut World) -> Self::Out;
     fn get_access(&self) -> Result<Access, ()>;
 }
 
@@ -178,24 +179,25 @@ struct FunctionSystem<State, In, Func>(State, Func, PhantomData<fn(In)>)
 where
     Self: System;
 
-pub trait ToSystem<In> {
-    fn system(self) -> Box<dyn System>;
+pub trait ToSystem<In, Out> {
+    fn system(self) -> Box<dyn System<Out = Out>>;
 }
 
 macro_rules! system_impl {
     ($($T:ident)+) => {
-        impl<Func, $($T: SystemParam,)+> System for FunctionSystem<($($T::SystemParamState,)+), ($($T,)+), Func>
+        impl<Out, Func, $($T: SystemParam,)+> System for FunctionSystem<($($T::SystemParamState,)+), ($($T,)+), Func>
         where
-            for<'a> &'a mut Func: FnMut($($T,)+),
-            for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+), {
+            for<'a> &'a mut Func: FnMut($($T,)+) -> Out,
+            for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+) -> Out, {
+                type Out = Out;
+
                 #[allow(non_snake_case)]
-                fn run(&mut self, world: &mut World) {
+                fn run(&mut self, world: &mut World) -> Out {
                     let this = self;
                     let ($($T,)+) = &mut this.0;
-                    // FIXME unwrap
-                    (&mut &mut this.1)($($T::from_world(world, $T).unwrap(),)+);
-                    // FIXME move this to a separate fn so this one doesnt need `&mut World`
+                    let out = (&mut &mut this.1)($($T::from_world(world, $T).unwrap(),)+);
                     $($T::system_finish_event($T, world);)+
+                    out
                 }
 
                 fn get_access(&self) -> Result<Access, ()> {
@@ -203,11 +205,11 @@ macro_rules! system_impl {
                 }
             }
 
-        impl<Func: 'static, $($T: SystemParam + 'static,)+> ToSystem<($($T,)+)> for Func
+        impl<Out, Func: 'static, $($T: SystemParam + 'static,)+> ToSystem<($($T,)+), Out> for Func
         where
-            for<'a> &'a mut Func: FnMut($($T,)+),
-            for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+), {
-            fn system(self) -> Box<dyn System> {
+            for<'a> &'a mut Func: FnMut($($T,)+) -> Out,
+            for<'a> &'a mut Func: FnMut($($T::SelfCtor<'_>,)+) -> Out, {
+            fn system(self) -> Box<dyn System<Out = Out>> {
                 Box::new(FunctionSystem::<($($T::SystemParamState,)+), _, _>(($($T::new_state(),)+), self, PhantomData))
             }
         }
@@ -229,7 +231,7 @@ mod tests {
 
     #[test]
     fn custom_into_sys() {
-        fn takes_sys<In, T: ToSystem<In>>(s: T, world: &mut World) {
+        fn takes_sys<In, T: ToSystem<In, ()>>(s: T, world: &mut World) {
             let mut sys = T::system(s);
             sys.run(world);
         }
@@ -246,5 +248,14 @@ mod tests {
         fn query(_: Query<&u64>, _: Commands, _: &World) {}
         let mut world = World::new();
         world.access_scope(query);
+    }
+
+    #[should_panic]
+    #[test]
+    fn conflict() {
+        fn sys(_: Query<&mut u32>, _: Query<&mut u32>) {}
+        let mut world = World::new();
+        world.spawn().insert(10_u32);
+        world.access_scope(sys);
     }
 }
