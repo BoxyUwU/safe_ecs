@@ -8,6 +8,7 @@ pub(crate) struct EntityMeta {
     pub(crate) archetype: usize,
 }
 
+#[derive(Debug)]
 pub(crate) struct Entities {
     len: AtomicUsize,
     meta: Vec<Option<EntityMeta>>,
@@ -59,7 +60,6 @@ impl Entities {
     pub fn spawn(&mut self, mut do_archetype_stuff: impl FnMut(Entity)) -> Entity {
         let e = self.reserve_entity();
         self.fix_reserved_entities(&mut do_archetype_stuff);
-        do_archetype_stuff(e);
         e
     }
 }
