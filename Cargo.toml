@@ -1,2 +1,2 @@
 [workspace]
-members = ["safe-ecs-derive", "safe-ecs"]
+members = ["safe_ecs_derive", "safe_ecs"]

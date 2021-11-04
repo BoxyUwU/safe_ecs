@@ -1,0 +1,7 @@
+[package]
+name = "safe_ecs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+safe_ecs_derive = { path = "../safe_ecs_derive" }

@@ -1,5 +1,5 @@
 [package]
-name = "safe-ecs-derive"
+name = "safe_ecs_derive"
 version = "0.1.0"
 edition = "2021"
 
