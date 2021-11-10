@@ -12,10 +12,18 @@ use std::{
 };
 
 pub trait QueryParam: sealed::Sealed + 'static {
-    type Lock<'a>;
-    type LockBorrow<'a>;
-    type Item<'a>;
-    type ItemIter<'a>;
+    type Lock<'a>
+    where
+        Self: 'a;
+    type LockBorrow<'a>
+    where
+        Self: 'a;
+    type Item<'a>
+    where
+        Self: 'a;
+    type ItemIter<'a>
+    where
+        Self: 'a;
     fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError>;
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a>;
     fn archetype_matches(archetype: &Archetype) -> bool;
