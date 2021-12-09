@@ -6,11 +6,11 @@ use std::{
 
 use crate::{
     entities::{Entities, Entity, EntityMeta},
-    errors, query, sealed,
+    errors, query,
 };
 
 pub trait Component: 'static {}
-pub trait Storage: sealed::Sealed + 'static {
+pub trait Storage: 'static {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn empty_of_same_type(&self) -> Box<dyn Storage>;
@@ -18,7 +18,6 @@ pub trait Storage: sealed::Sealed + 'static {
     fn swap_remove_and_drop(&mut self, idx: usize);
 }
 
-impl<T: Component> sealed::Sealed for Vec<T> {}
 impl<T: Component> Storage for Vec<T> {
     fn as_any(&self) -> &dyn Any {
         self

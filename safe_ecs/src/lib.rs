@@ -21,10 +21,6 @@ pub mod errors {
     pub struct WorldBorrowError(pub &'static str);
 }
 
-pub(crate) mod sealed {
-    pub trait Sealed {}
-}
-
 #[cfg(test)]
 mod test_component_impls {
     use crate::Component;

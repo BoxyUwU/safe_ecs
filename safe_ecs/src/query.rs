@@ -1,6 +1,5 @@
 use crate::{
     errors::WorldBorrowError,
-    sealed,
     system::Access,
     world::{Archetype, Storage},
     Component, Entity, World,
@@ -11,7 +10,7 @@ use std::{
     marker::PhantomData,
 };
 
-pub trait QueryParam: sealed::Sealed + 'static {
+pub trait QueryParam: 'static {
     type Lock<'a>
     where
         Self: 'a;
@@ -35,7 +34,6 @@ pub trait QueryParam: sealed::Sealed + 'static {
     fn get_access() -> Result<Access, ()>;
 }
 
-impl sealed::Sealed for Entity {}
 impl QueryParam for Entity {
     type Lock<'a> = ();
     type LockBorrow<'a> = ();
@@ -63,7 +61,6 @@ impl QueryParam for Entity {
     }
 }
 
-impl<T: Component> sealed::Sealed for &'static T {}
 impl<T: Component> QueryParam for &'static T {
     type Lock<'a> = cell::Ref<'a, Vec<Box<dyn Storage>>>;
     type LockBorrow<'a> = &'a [Box<dyn Storage>];
@@ -106,7 +103,6 @@ impl<T: Component> QueryParam for &'static T {
     }
 }
 
-impl<T: Component> sealed::Sealed for &'static mut T {}
 impl<T: Component> QueryParam for &'static mut T {
     type Lock<'a> = cell::RefMut<'a, Vec<Box<dyn Storage>>>;
     type LockBorrow<'a> = (usize, &'a mut [Box<dyn Storage>]);
@@ -162,7 +158,6 @@ impl<T: Component> QueryParam for &'static mut T {
 
 macro_rules! query_param_tuple_impl {
     ($($T:ident)+) => {
-        impl<$($T: QueryParam),+> sealed::Sealed for ($($T,)+) {}
         impl<$($T: QueryParam),+> QueryParam for ($($T,)+) {
             type Lock<'a> = ($($T::Lock<'a>,)+);
             type LockBorrow<'a> = ($($T::LockBorrow<'a>,)+);
@@ -218,7 +213,6 @@ query_param_tuple_impl!(A B C);
 query_param_tuple_impl!(A B);
 query_param_tuple_impl!(A);
 
-impl<Q: QueryParam> sealed::Sealed for Maybe<Q> {}
 pub struct Maybe<Q: QueryParam>(PhantomData<Q>);
 pub enum MaybeIter<'a, Q: QueryParam> {
     Some(Q::ItemIter<'a>),
