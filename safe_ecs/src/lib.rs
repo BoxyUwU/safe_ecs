@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![feature(type_alias_impl_trait, generic_associated_types)]
+#![feature(map_try_insert, type_alias_impl_trait, generic_associated_types)]
 
 mod commands;
 mod entities;

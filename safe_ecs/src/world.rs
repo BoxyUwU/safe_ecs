@@ -9,6 +9,9 @@ use crate::{
     errors, query,
 };
 
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct EcsTypeId(usize);
+
 pub trait Component: 'static {}
 pub trait Storage: 'static {
     fn as_any(&self) -> &dyn Any;
@@ -57,7 +60,7 @@ impl dyn Storage {
 
 pub struct Archetype {
     pub(crate) entities: Vec<Entity>,
-    pub(crate) column_indices: HashMap<TypeId, usize>,
+    pub(crate) column_indices: HashMap<EcsTypeId, usize>,
 }
 
 impl Archetype {
@@ -69,7 +72,9 @@ impl Archetype {
 pub struct World {
     pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
-    pub(crate) columns: HashMap<TypeId, RefCell<Vec<Box<dyn Storage>>>>,
+    pub(crate) columns: HashMap<EcsTypeId, RefCell<Vec<Box<dyn Storage>>>>,
+    next_ecs_type_id: EcsTypeId,
+    pub(crate) ecs_type_ids: HashMap<TypeId, EcsTypeId>,
 }
 
 impl World {
@@ -81,7 +86,39 @@ impl World {
                 column_indices: HashMap::new(),
             }],
             columns: HashMap::new(),
+            next_ecs_type_id: EcsTypeId(0),
+            ecs_type_ids: HashMap::new(),
         }
+    }
+
+    pub fn type_to_ecs_type_id<T: Component>(&self) -> Option<EcsTypeId> {
+        self.ecs_type_ids.get(&TypeId::of::<T>()).copied()
+    }
+
+    pub fn type_to_ecs_type_id_or_create<T: Component>(&mut self) -> EcsTypeId {
+        self.type_to_ecs_type_id::<T>()
+            .unwrap_or_else(|| self.new_static_ecs_type_id::<T>().unwrap())
+    }
+
+    pub fn new_static_ecs_type_id<T: Component>(&mut self) -> Option<EcsTypeId> {
+        let ecs_type_id = self.next_ecs_type_id;
+        self.ecs_type_ids
+            .try_insert(TypeId::of::<T>(), ecs_type_id)
+            .ok()?;
+        self.next_ecs_type_id.0 = ecs_type_id
+            .0
+            .checked_add(1)
+            .expect("girl why u making usize::MAX ecs_type_ids");
+        Some(ecs_type_id)
+    }
+
+    pub fn new_dynamic_ecs_type_id(&mut self) -> EcsTypeId {
+        let ecs_type_id = self.next_ecs_type_id;
+        self.next_ecs_type_id.0 = ecs_type_id
+            .0
+            .checked_add(1)
+            .expect("girl why u making usize::MAX ecs_type_ids");
+        ecs_type_id
     }
 
     pub fn is_alive(&self, entity: Entity) -> bool {
@@ -121,51 +158,66 @@ impl World {
     }
 
     pub fn has_component<T: Component>(&self, entity: Entity) -> Option<bool> {
+        let ecs_type_id = match self.type_to_ecs_type_id::<T>() {
+            Some(id) => id,
+            None => return Some(false),
+        };
+        self.has_ecs_type_id(entity, ecs_type_id)
+    }
+
+    pub fn has_ecs_type_id(&self, entity: Entity, ecs_type_id: EcsTypeId) -> Option<bool> {
         let archetype = self.entities.meta(entity)?.archetype;
         Some(
             self.archetypes[archetype]
                 .column_indices
-                .get(&TypeId::of::<T>())
+                .get(&ecs_type_id)
                 .is_some(),
         )
     }
 
+    // FIXME add a dynamic version
     pub fn get_component<T: Component>(&self, entity: Entity) -> Option<cell::Ref<T>> {
         if self.has_component::<T>(entity)? == false {
             return None;
         }
+        let ecs_type_id = self.type_to_ecs_type_id::<T>()?;
 
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
         let archetype = &self.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = archetype.column_indices[&TypeId::of::<T>()];
-        Some(cell::Ref::map(self.get_column::<T>(column_idx), |col| {
-            &col.as_vec::<T>().unwrap()[entity_idx]
-        }))
+        let column_idx = archetype.column_indices[&ecs_type_id];
+        Some(cell::Ref::map(
+            self.get_column(column_idx, ecs_type_id),
+            |col| &col.as_vec::<T>().unwrap()[entity_idx],
+        ))
     }
 
+    // FIXME add a dynamic version
     pub fn get_component_mut<T: Component>(&self, entity: Entity) -> Option<cell::RefMut<T>> {
         if self.has_component::<T>(entity)? == false {
             return None;
         }
+        let ecs_type_id = self.type_to_ecs_type_id::<T>()?;
 
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
         let archetype = &self.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = archetype.column_indices[&TypeId::of::<T>()];
+        let column_idx = archetype.column_indices[&ecs_type_id];
         Some(cell::RefMut::map(
-            self.get_column_mut::<T>(column_idx),
+            self.get_column_mut(column_idx, ecs_type_id),
             |vec| &mut vec.as_vec_mut::<T>().unwrap()[entity_idx],
         ))
     }
 
+    // FIXME add a dynamic version
     pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
         if self.has_component::<T>(entity)? == false {
             return None;
         }
+        let ecs_type_id = self.type_to_ecs_type_id::<T>()?;
 
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
-        let new_archetype_id = self.get_or_insert_archetype_from_remove::<T>(archetype_id);
+        let new_archetype_id = self.get_or_insert_archetype_from_remove(archetype_id, ecs_type_id);
         *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
         };
@@ -183,29 +235,31 @@ impl World {
         }
         new_archetype.entities.push(entity);
 
-        let column_idx = *old_archetype
-            .column_indices
-            .get(&TypeId::of::<T>())
-            .unwrap();
+        let column_idx = *old_archetype.column_indices.get(&ecs_type_id).unwrap();
         Some(
-            self.get_column_mut::<T>(column_idx)
+            self.get_column_mut(column_idx, ecs_type_id)
                 .as_vec_mut::<T>()
                 .unwrap()
                 .swap_remove(entity_idx),
         )
     }
 
+    // FIXME add a dynamic version
     pub fn insert_component<T: Component>(&mut self, entity: Entity, component: T) -> Option<T> {
         if self.is_alive(entity) == false {
             return None;
         }
+        let ecs_type_id = self.type_to_ecs_type_id_or_create::<T>();
 
         if let Some(mut old_component) = self.get_component_mut::<T>(entity) {
             return Some(std::mem::replace(&mut *old_component, component));
         }
 
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
-        let new_archetype_id = self.get_or_insert_archetype_from_insert::<T>(archetype_id);
+        let new_archetype_id =
+            self.get_or_insert_archetype_from_insert(archetype_id, ecs_type_id, || {
+                Box::new(Vec::<T>::new())
+            });
         *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
         };
@@ -223,11 +277,8 @@ impl World {
         }
         new_archetype.entities.push(entity);
 
-        let column_idx = *new_archetype
-            .column_indices
-            .get(&TypeId::of::<T>())
-            .unwrap();
-        self.get_column_mut::<T>(column_idx).push(component);
+        let column_idx = *new_archetype.column_indices.get(&ecs_type_id).unwrap();
+        self.get_column_mut(column_idx, ecs_type_id).push(component);
         None
     }
 
@@ -264,19 +315,21 @@ fn get_two<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
 }
 
 impl World {
-    fn get_column<T: Component>(&self, column_idx: usize) -> cell::Ref<'_, dyn Storage> {
-        cell::Ref::map(self.columns[&TypeId::of::<T>()].borrow(), |vec| {
-            &*vec[column_idx]
-        })
+    fn get_column(&self, column_idx: usize, ecs_type_id: EcsTypeId) -> cell::Ref<'_, dyn Storage> {
+        cell::Ref::map(self.columns[&ecs_type_id].borrow(), |vec| &*vec[column_idx])
     }
 
-    fn get_column_mut<T: Component>(&self, column_idx: usize) -> cell::RefMut<'_, dyn Storage> {
-        cell::RefMut::map(self.columns[&TypeId::of::<T>()].borrow_mut(), |vec| {
+    fn get_column_mut(
+        &self,
+        column_idx: usize,
+        ecs_type_id: EcsTypeId,
+    ) -> cell::RefMut<'_, dyn Storage> {
+        cell::RefMut::map(self.columns[&ecs_type_id].borrow_mut(), |vec| {
             &mut *vec[column_idx]
         })
     }
 
-    fn find_archetype_from_ids(&self, ids: &[TypeId]) -> Option<usize> {
+    fn find_archetype_from_ids(&self, ids: &[EcsTypeId]) -> Option<usize> {
         self.archetypes.iter().position(|archetype| {
             (archetype.column_indices.len() == ids.len())
                 && archetype
@@ -286,17 +339,20 @@ impl World {
         })
     }
 
-    fn get_or_insert_archetype_from_remove<T: Component>(&mut self, archetype: usize) -> usize {
+    fn get_or_insert_archetype_from_remove(
+        &mut self,
+        archetype: usize,
+        removed_ecs_type_id: EcsTypeId,
+    ) -> usize {
         assert!(self.archetypes[archetype]
             .column_indices
-            .get(&TypeId::of::<T>())
+            .get(&removed_ecs_type_id)
             .is_some());
 
-        let removed_type_id = TypeId::of::<T>();
         let new_type_ids = self.archetypes[archetype]
             .column_indices
             .keys()
-            .filter(|column_type_id| **column_type_id != removed_type_id)
+            .filter(|column_type_id| **column_type_id != removed_ecs_type_id)
             .map(|&type_id| type_id)
             .collect::<Vec<_>>();
 
@@ -310,21 +366,26 @@ impl World {
             })
     }
 
-    fn get_or_insert_archetype_from_insert<T: Component>(&mut self, archetype: usize) -> usize {
+    fn get_or_insert_archetype_from_insert(
+        &mut self,
+        archetype: usize,
+        inserted_ecs_type_id: EcsTypeId,
+        make_empty_storage: impl FnOnce() -> Box<dyn Storage>,
+    ) -> usize {
         assert!(self.archetypes[archetype]
             .column_indices
-            .get(&TypeId::of::<T>())
+            .get(&inserted_ecs_type_id)
             .is_none());
 
         self.columns
-            .entry(TypeId::of::<T>())
-            .or_insert_with(|| RefCell::new(vec![Box::new(Vec::<T>::new()) as Box<dyn Storage>]));
+            .entry(inserted_ecs_type_id)
+            .or_insert_with(|| RefCell::new(vec![make_empty_storage()]));
 
         let new_type_ids = self.archetypes[archetype]
             .column_indices
             .keys()
             .map(|&column_type_id| column_type_id)
-            .chain(std::iter::once(TypeId::of::<T>()))
+            .chain(std::iter::once(inserted_ecs_type_id))
             .collect::<Vec<_>>();
 
         self.find_archetype_from_ids(&new_type_ids)
@@ -337,7 +398,11 @@ impl World {
             })
     }
 
-    fn push_archetype(&mut self, type_ids: Vec<TypeId>, storages: Vec<Box<dyn Storage>>) -> usize {
+    fn push_archetype(
+        &mut self,
+        type_ids: Vec<EcsTypeId>,
+        storages: Vec<Box<dyn Storage>>,
+    ) -> usize {
         assert!(self.find_archetype_from_ids(&type_ids).is_none());
         let column_indices = type_ids
             .into_iter()
@@ -393,6 +458,13 @@ mod tests {
                 None => (),
             }
         }
+    }
+
+    #[test]
+    fn has_component() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        assert_eq!(Some(false), world.has_component::<u32>(e));
     }
 
     #[test]

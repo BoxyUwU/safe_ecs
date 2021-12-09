@@ -1,12 +1,13 @@
 use crate::{
     errors::WorldBorrowError,
     system::Access,
-    world::{Archetype, Storage},
+    world::{Archetype, EcsTypeId, Storage},
     Component, Entity, World,
 };
 use std::{
     any::{type_name, TypeId},
     cell,
+    collections::HashMap,
     marker::PhantomData,
 };
 
@@ -25,10 +26,11 @@ pub trait QueryParam: 'static {
         Self: 'a;
     fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError>;
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a>;
-    fn archetype_matches(archetype: &Archetype) -> bool;
+    fn archetype_matches(archetype: &Archetype, _: &HashMap<TypeId, EcsTypeId>) -> bool;
     fn item_iter_from_archetype<'a>(
         archetype: &'a Archetype,
         lock_borrow: &mut Self::LockBorrow<'a>,
+        _: &HashMap<TypeId, EcsTypeId>,
     ) -> Self::ItemIter<'a>;
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>>;
     fn get_access() -> Result<Access, ()>;
@@ -44,12 +46,13 @@ impl QueryParam for Entity {
         Ok(Some(()))
     }
     fn lock_borrows_from_locks<'a, 'b>(_: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {}
-    fn archetype_matches(_: &Archetype) -> bool {
+    fn archetype_matches(_: &Archetype, _: &HashMap<TypeId, EcsTypeId>) -> bool {
         true
     }
     fn item_iter_from_archetype<'a>(
         archetype: &'a Archetype,
         _: &mut Self::LockBorrow<'a>,
+        _: &HashMap<TypeId, EcsTypeId>,
     ) -> Self::ItemIter<'a> {
         archetype.entities.iter()
     }
@@ -68,9 +71,14 @@ impl<T: Component> QueryParam for &'static T {
     type ItemIter<'a> = std::slice::Iter<'a, T>;
 
     fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+        let ecs_type_id = match world.ecs_type_ids.get(&TypeId::of::<T>()) {
+            None => return Ok(None),
+            Some(ecs_type_id) => ecs_type_id,
+        };
+
         world
             .columns
-            .get(&TypeId::of::<T>())
+            .get(ecs_type_id)
             .map(|cell| {
                 cell.try_borrow()
                     .map_err(|_| WorldBorrowError(type_name::<T>()))
@@ -82,15 +90,21 @@ impl<T: Component> QueryParam for &'static T {
         lock.as_slice()
     }
 
-    fn archetype_matches(archetype: &Archetype) -> bool {
-        archetype.column_indices.contains_key(&TypeId::of::<T>())
+    fn archetype_matches(archetype: &Archetype, ecs_type_ids: &HashMap<TypeId, EcsTypeId>) -> bool {
+        let ecs_type_id = match ecs_type_ids.get(&TypeId::of::<T>()) {
+            Some(id) => id,
+            None => return false,
+        };
+        archetype.column_indices.contains_key(ecs_type_id)
     }
 
     fn item_iter_from_archetype<'a>(
         archetype: &'a Archetype,
         lock_borrow: &mut Self::LockBorrow<'a>,
+        ecs_type_ids: &HashMap<TypeId, EcsTypeId>,
     ) -> Self::ItemIter<'a> {
-        let col = archetype.column_indices[&TypeId::of::<T>()];
+        let ecs_type_id = ecs_type_ids.get(&TypeId::of::<T>()).unwrap();
+        let col = archetype.column_indices[ecs_type_id];
         lock_borrow[col].as_vec::<T>().unwrap().iter()
     }
 
@@ -110,9 +124,14 @@ impl<T: Component> QueryParam for &'static mut T {
     type ItemIter<'a> = std::slice::IterMut<'a, T>;
 
     fn lock_from_world(world: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+        let ecs_type_id = match world.ecs_type_ids.get(&TypeId::of::<T>()) {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
         world
             .columns
-            .get(&TypeId::of::<T>())
+            .get(ecs_type_id)
             .map(|cell| {
                 cell.try_borrow_mut()
                     .map_err(|_| WorldBorrowError(type_name::<T>()))
@@ -124,15 +143,22 @@ impl<T: Component> QueryParam for &'static mut T {
         (0, lock.as_mut_slice())
     }
 
-    fn archetype_matches(archetype: &Archetype) -> bool {
-        archetype.column_indices.contains_key(&TypeId::of::<T>())
+    fn archetype_matches(archetype: &Archetype, ecs_type_ids: &HashMap<TypeId, EcsTypeId>) -> bool {
+        let ecs_type_id = match ecs_type_ids.get(&TypeId::of::<T>()) {
+            Some(id) => id,
+            None => return false,
+        };
+        archetype.column_indices.contains_key(ecs_type_id)
     }
 
     fn item_iter_from_archetype<'a>(
         archetype: &'a Archetype,
         (num_chopped_off, lock_borrow): &mut Self::LockBorrow<'a>,
+        ecs_type_ids: &HashMap<TypeId, EcsTypeId>,
     ) -> Self::ItemIter<'a> {
-        let col = archetype.column_indices[&TypeId::of::<T>()];
+        let ecs_type_id = ecs_type_ids.get(&TypeId::of::<T>()).unwrap();
+
+        let col = archetype.column_indices[ecs_type_id];
         assert!(col >= *num_chopped_off);
         let idx = col - *num_chopped_off;
         let taken_out_borrow = std::mem::replace(lock_borrow, &mut []);
@@ -181,14 +207,18 @@ macro_rules! query_param_tuple_impl {
                 ($($T::lock_borrows_from_locks($T),)+)
             }
 
-            fn archetype_matches(archetype: &Archetype) -> bool {
-                $($T::archetype_matches(archetype))&&+
+            fn archetype_matches(archetype: &Archetype, ecs_type_ids: &HashMap<TypeId, EcsTypeId>) -> bool {
+                $($T::archetype_matches(archetype, ecs_type_ids))&&+
             }
 
             #[allow(non_snake_case)]
-            fn item_iter_from_archetype<'a>(archetype: &'a Archetype, lock_borrow: &mut Self::LockBorrow<'a>) -> Self::ItemIter<'a> {
+            fn item_iter_from_archetype<'a>(
+                archetype: &'a Archetype,
+                lock_borrow: &mut Self::LockBorrow<'a>,
+                ecs_type_ids: &HashMap<TypeId, EcsTypeId>,
+            ) -> Self::ItemIter<'a> {
                 let ($($T,)+) = lock_borrow;
-                ($($T::item_iter_from_archetype(archetype, $T),)+)
+                ($($T::item_iter_from_archetype(archetype, $T, ecs_type_ids),)+)
             }
 
             #[allow(non_snake_case)]
@@ -233,18 +263,20 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
             .map(|q_lock| Q::lock_borrows_from_locks(q_lock))
     }
 
-    fn archetype_matches(_: &Archetype) -> bool {
+    fn archetype_matches(_: &Archetype, _: &HashMap<TypeId, EcsTypeId>) -> bool {
         true
     }
 
     fn item_iter_from_archetype<'a>(
         archetype: &'a Archetype,
         lock_borrow: &mut Self::LockBorrow<'a>,
+        ecs_type_ids: &HashMap<TypeId, EcsTypeId>,
     ) -> Self::ItemIter<'a> {
-        match Q::archetype_matches(archetype) {
+        match Q::archetype_matches(archetype, ecs_type_ids) {
             true => MaybeIter::Some(Q::item_iter_from_archetype(
                 archetype,
                 lock_borrow.as_mut().unwrap(),
+                ecs_type_ids,
             )),
             false => MaybeIter::None(archetype.entities.len()),
         }
@@ -282,6 +314,7 @@ impl<'a, 'b: 'a, Q: QueryParam> IntoIterator for &'a mut Query<'b, Q> {
 }
 
 pub struct QueryIter<'a, 'b: 'a, Q: QueryParam> {
+    ecs_type_ids: &'a HashMap<TypeId, EcsTypeId>,
     /// `None` if we couldnt acquire the locks because
     /// one of the columns had not been created yet
     borrows: Option<Q::LockBorrow<'a>>,
@@ -296,10 +329,11 @@ impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
             world
                 .archetypes
                 .iter()
-                .filter(|archetype| Q::archetype_matches(archetype))
+                .filter(|archetype| Q::archetype_matches(archetype, &world.ecs_type_ids))
         }
 
         Self {
+            ecs_type_ids: &borrows.0.ecs_type_ids,
             archetype_iter: defining_use::<Q>(borrows.0),
             borrows: borrows
                 .1
@@ -317,7 +351,11 @@ impl<'a, 'b: 'a, Q: QueryParam> Iterator for QueryIter<'a, 'b, Q> {
         loop {
             if let None = &self.item_iters {
                 let archetype = self.archetype_iter.next()?;
-                self.item_iters = Some(Q::item_iter_from_archetype(archetype, borrows));
+                self.item_iters = Some(Q::item_iter_from_archetype(
+                    archetype,
+                    borrows,
+                    self.ecs_type_ids,
+                ));
             }
 
             match Q::advance_iter(self.item_iters.as_mut().unwrap()) {
