@@ -197,15 +197,23 @@ impl World {
             .0
             .checked_add(1)
             .expect("girl why u making usize::MAX ecs_type_ids");
+        self.columns
+            .insert(ecs_type_id, RefCell::new(vec![Box::new(Vec::<T>::new())]));
         Some(ecs_type_id)
     }
 
-    pub fn new_dynamic_ecs_type_id(&mut self) -> EcsTypeId {
+    pub fn new_dynamic_ecs_type_id(&mut self, layout: std::alloc::Layout) -> EcsTypeId {
         let ecs_type_id = self.next_ecs_type_id;
         self.next_ecs_type_id.0 = ecs_type_id
             .0
             .checked_add(1)
             .expect("girl why u making usize::MAX ecs_type_ids");
+        self.columns.insert(
+            ecs_type_id,
+            RefCell::new(vec![Box::new(crate::dynamic_storage::make_aligned_vec(
+                layout,
+            ))]),
+        );
         ecs_type_id
     }
 
@@ -352,10 +360,7 @@ impl World {
         }
 
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
-        let new_archetype_id =
-            self.get_or_insert_archetype_from_insert(archetype_id, ecs_type_id, || {
-                Box::new(Vec::<T>::new())
-            });
+        let new_archetype_id = self.get_or_insert_archetype_from_insert(archetype_id, ecs_type_id);
         *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
         };
@@ -469,16 +474,11 @@ impl World {
         &mut self,
         archetype: usize,
         inserted_ecs_type_id: EcsTypeId,
-        make_empty_storage: impl FnOnce() -> Box<dyn Storage>,
     ) -> usize {
         assert!(self.archetypes[archetype]
             .column_indices
             .get(&inserted_ecs_type_id)
             .is_none());
-
-        self.columns
-            .entry(inserted_ecs_type_id)
-            .or_insert_with(|| RefCell::new(vec![make_empty_storage()]));
 
         let new_type_ids = self.archetypes[archetype]
             .column_indices

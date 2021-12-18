@@ -104,13 +104,6 @@ where
     }
 }
 impl dyn ErasedBytesVec + '_ {
-    fn unerase_alignement<const A: usize>(&self) -> &AlignedBytesVec<A>
-    where
-        (): AlignTo<A>,
-    {
-        self.erased_as_any().downcast_ref().unwrap()
-    }
-
     fn unerase_alignement_mut<const A: usize>(&mut self) -> &mut AlignedBytesVec<A>
     where
         (): AlignTo<A>,
