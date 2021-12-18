@@ -2,32 +2,56 @@ use std::{
     any::{Any, TypeId},
     cell::{self, RefCell},
     collections::HashMap,
+    mem::MaybeUninit,
 };
 
 use crate::{
+    dynamic_storage::ErasedBytesVec,
     entities::{Entities, Entity, EntityMeta},
-    errors, query,
+    errors, query, LtPtr, LtPtrMut,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct EcsTypeId(usize);
 
 pub trait Component: 'static {}
+
 pub trait Storage: 'static {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn as_typed_storage(&self) -> Option<&dyn TypedStorage>;
+    fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage>;
+
+    fn as_erased_storage(&self) -> Option<&dyn ErasedBytesVec>;
+    fn as_erased_storage_mut(&mut self) -> Option<&mut dyn ErasedBytesVec>;
+
     fn empty_of_same_type(&self) -> Box<dyn Storage>;
+
     fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize);
     fn swap_remove_and_drop(&mut self, idx: usize);
+
+    fn get_element_ptr(&self, idx: usize) -> LtPtr<'_>;
+    fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_>;
+}
+
+pub trait TypedStorage: 'static {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<T: Component> Storage for Vec<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn as_typed_storage(&self) -> Option<&dyn TypedStorage> {
+        Some(self)
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage> {
+        Some(self)
+    }
+
+    fn as_erased_storage(&self) -> Option<&dyn ErasedBytesVec> {
+        None
+    }
+
+    fn as_erased_storage_mut(&mut self) -> Option<&mut dyn ErasedBytesVec> {
+        None
     }
 
     fn empty_of_same_type(&self) -> Box<dyn Storage> {
@@ -35,16 +59,41 @@ impl<T: Component> Storage for Vec<T> {
     }
 
     fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize) {
-        let other = other.as_vec_mut::<T>().unwrap();
+        let other = other
+            .as_typed_storage_mut()
+            .unwrap()
+            .as_vec_mut::<T>()
+            .unwrap();
         other.push(self.swap_remove(idx));
     }
 
     fn swap_remove_and_drop(&mut self, idx: usize) {
         self.swap_remove(idx);
     }
+
+    fn get_element_ptr(&self, idx: usize) -> LtPtr<'_> {
+        let ptr = &self[idx] as *const T as *const MaybeUninit<u8>;
+        let ptr = std::ptr::slice_from_raw_parts(ptr, std::mem::size_of::<T>());
+        LtPtr(Default::default(), ptr)
+    }
+
+    fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_> {
+        let ptr = &mut self[idx] as *mut T as *mut MaybeUninit<u8>;
+        let ptr = std::ptr::slice_from_raw_parts_mut(ptr, std::mem::size_of::<T>());
+        LtPtrMut(Default::default(), ptr)
+    }
+}
+impl<T: Component> TypedStorage for Vec<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
-impl dyn Storage {
+impl dyn TypedStorage {
     pub(crate) fn as_vec<U: 'static>(&self) -> Option<&Vec<U>> {
         self.as_any().downcast_ref()
     }
@@ -55,6 +104,45 @@ impl dyn Storage {
 
     pub(crate) fn push<T: 'static>(&mut self, arg: T) {
         self.as_vec_mut().unwrap().push(arg);
+    }
+}
+
+impl Storage for Box<dyn ErasedBytesVec> {
+    fn as_typed_storage(&self) -> Option<&dyn TypedStorage> {
+        None
+    }
+
+    fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage> {
+        None
+    }
+
+    fn as_erased_storage(&self) -> Option<&dyn ErasedBytesVec> {
+        Some(&**self)
+    }
+
+    fn as_erased_storage_mut(&mut self) -> Option<&mut dyn ErasedBytesVec> {
+        Some(&mut **self)
+    }
+
+    fn empty_of_same_type(&self) -> Box<dyn Storage> {
+        Box::new(self.empty_of_same_layout())
+    }
+
+    fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize) {
+        let other = other.as_erased_storage_mut().unwrap();
+        (&mut **self).swap_remove_move_to(other, idx);
+    }
+
+    fn swap_remove_and_drop(&mut self, idx: usize) {
+        (&mut **self).move_end_to(idx);
+    }
+
+    fn get_element_ptr(&self, idx: usize) -> LtPtr<'_> {
+        (&**self).get_element_ptr(idx)
+    }
+
+    fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_> {
+        (&mut **self).get_element_ptr_mut(idx)
     }
 }
 
@@ -188,7 +276,7 @@ impl World {
         let column_idx = archetype.column_indices[&ecs_type_id];
         Some(cell::Ref::map(
             self.get_column(column_idx, ecs_type_id),
-            |col| &col.as_vec::<T>().unwrap()[entity_idx],
+            |col| &col.as_typed_storage().unwrap().as_vec::<T>().unwrap()[entity_idx],
         ))
     }
 
@@ -205,7 +293,13 @@ impl World {
         let column_idx = archetype.column_indices[&ecs_type_id];
         Some(cell::RefMut::map(
             self.get_column_mut(column_idx, ecs_type_id),
-            |vec| &mut vec.as_vec_mut::<T>().unwrap()[entity_idx],
+            |vec| {
+                &mut vec
+                    .as_typed_storage_mut()
+                    .unwrap()
+                    .as_vec_mut::<T>()
+                    .unwrap()[entity_idx]
+            },
         ))
     }
 
@@ -238,6 +332,8 @@ impl World {
         let column_idx = *old_archetype.column_indices.get(&ecs_type_id).unwrap();
         Some(
             self.get_column_mut(column_idx, ecs_type_id)
+                .as_typed_storage_mut()
+                .unwrap()
                 .as_vec_mut::<T>()
                 .unwrap()
                 .swap_remove(entity_idx),
@@ -278,7 +374,10 @@ impl World {
         new_archetype.entities.push(entity);
 
         let column_idx = *new_archetype.column_indices.get(&ecs_type_id).unwrap();
-        self.get_column_mut(column_idx, ecs_type_id).push(component);
+        self.get_column_mut(column_idx, ecs_type_id)
+            .as_typed_storage_mut()
+            .unwrap()
+            .push(component);
         None
     }
 

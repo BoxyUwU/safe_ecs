@@ -105,7 +105,12 @@ impl<T: Component> QueryParam for &'static T {
     ) -> Self::ItemIter<'a> {
         let ecs_type_id = ecs_type_ids.get(&TypeId::of::<T>()).unwrap();
         let col = archetype.column_indices[ecs_type_id];
-        lock_borrow[col].as_vec::<T>().unwrap().iter()
+        lock_borrow[col]
+            .as_typed_storage()
+            .unwrap()
+            .as_vec::<T>()
+            .unwrap()
+            .iter()
     }
 
     fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
@@ -167,6 +172,8 @@ impl<T: Component> QueryParam for &'static mut T {
         *num_chopped_off += chopped_of.len();
         chopped_of
             .last_mut()
+            .unwrap()
+            .as_typed_storage_mut()
             .unwrap()
             .as_vec_mut::<T>()
             .unwrap()

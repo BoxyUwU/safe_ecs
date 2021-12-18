@@ -22,6 +22,11 @@ pub mod errors {
     pub struct WorldBorrowError(pub &'static str);
 }
 
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+pub struct LtPtr<'a>(PhantomData<&'a ()>, pub *const [MaybeUninit<u8>]);
+pub struct LtPtrMut<'a>(PhantomData<&'a mut ()>, pub *mut [MaybeUninit<u8>]);
+
 #[cfg(test)]
 mod test_component_impls {
     use crate::Component;
