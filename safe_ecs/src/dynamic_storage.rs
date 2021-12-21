@@ -1,11 +1,12 @@
 use std::{alloc::Layout, any::Any, mem::MaybeUninit};
 
-use crate::{LtPtr, LtPtrMut};
+use crate::{LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly};
 
 struct AlignedBytesVec<const A: usize>
 where
     (): AlignTo<A>,
 {
+    inserted_over_space: Vec<<() as AlignTo<A>>::Aligned>,
     buf: Vec<<() as AlignTo<A>>::Aligned>,
     len_elements: usize,
     size: usize,
@@ -20,10 +21,13 @@ fn index_range_of_element(size: usize, align: usize, idx: usize) -> std::ops::Ra
 pub trait ErasedBytesVec {
     fn get_element_ptr(&self, idx: usize) -> LtPtr<'_>;
     fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_>;
-    fn realloc(&mut self);
+    fn realloc_if_full(&mut self);
     fn empty_of_same_layout(&self) -> Box<dyn ErasedBytesVec>;
     fn swap_remove_move_to(&mut self, other: &mut dyn ErasedBytesVec, idx: usize);
-    fn move_end_to(&mut self, idx: usize);
+    fn swap_remove(&mut self, idx: usize) -> Option<LtPtrOwn<'_>>;
+    fn copy_to_insert_over_space(&mut self, idx: usize) -> (LtPtrOwn<'_>, LtPtrWriteOnly<'_>);
+    fn num_elements(&self) -> usize;
+    fn incr_len(&mut self);
 
     fn erased_as_any(&self) -> &dyn Any;
     fn erased_as_any_mut(&mut self) -> &mut dyn Any;
@@ -46,10 +50,16 @@ where
         LtPtrMut(Default::default(), ptr)
     }
 
-    fn realloc(&mut self) {
-        match self.buf.len() {
-            0 => self.buf.resize_with(self.size, Default::default),
-            n => self.buf.resize_with(n * 2, Default::default),
+    fn realloc_if_full(&mut self) {
+        if self.size == 0 {
+            return;
+        }
+
+        if self.len_elements == (self.buf.len() / self.size) {
+            match self.buf.len() {
+                0 => self.buf.resize_with(self.size, Default::default),
+                n => self.buf.resize_with(n * 2, Default::default),
+            }
         }
     }
 
@@ -68,17 +78,18 @@ where
             *dst = *src;
         }
 
-        self.move_end_to(idx);
+        self.swap_remove(idx);
     }
 
-    fn move_end_to(&mut self, idx: usize) {
+    fn swap_remove(&mut self, idx: usize) -> Option<LtPtrOwn<'_>> {
         if self.len_elements == 0 {
             panic!("");
         }
 
         if idx == self.len_elements - 1 {
             self.len_elements -= 1;
-            return;
+            let ptr = self.get_element_ptr_mut(self.len_elements);
+            return Some(LtPtrOwn(Default::default(), ptr.1 as *const _));
         }
 
         let src = index_range_of_element(self.size, A, self.len_elements - 1);
@@ -89,10 +100,42 @@ where
         let dst_slice = &mut dst_slice[dst];
 
         for (src, dst) in src_slice.into_iter().zip(dst_slice.into_iter()) {
-            *dst = *src;
+            std::mem::swap(src, dst);
         }
 
         self.len_elements -= 1;
+        let ptr = self.get_element_ptr_mut(self.len_elements);
+        Some(LtPtrOwn(Default::default(), ptr.1 as *const _))
+    }
+
+    fn copy_to_insert_over_space(&mut self, idx: usize) -> (LtPtrOwn<'_>, LtPtrWriteOnly<'_>) {
+        let src_idx = index_range_of_element(self.size, A, idx);
+        let src = &mut self.buf[src_idx];
+        let dst = &mut self.inserted_over_space[..];
+
+        for (src, dst) in src.into_iter().zip(dst.into_iter()) {
+            *dst = *src;
+        }
+
+        let src_ptr = src as *mut [_] as *mut [MaybeUninit<u8>];
+        let dest_ptr = dst as *mut [_] as *mut [MaybeUninit<u8>] as *const [MaybeUninit<u8>];
+        (
+            LtPtrOwn(Default::default(), dest_ptr),
+            LtPtrWriteOnly(Default::default(), src_ptr),
+        )
+    }
+
+    fn num_elements(&self) -> usize {
+        self.len_elements
+    }
+
+    fn incr_len(&mut self) {
+        if self.size == 0 {
+            self.len_elements += 1;
+        }
+
+        assert!(self.len_elements < (self.buf.len() / self.size));
+        self.len_elements += 1;
     }
 
     fn erased_as_any(&self) -> &dyn Any {
@@ -119,6 +162,7 @@ where
     fn new(size: usize) -> Box<Self> {
         assert!(size == 0 || size % A == 0);
         Box::new(Self {
+            inserted_over_space: vec![<_>::default(); size],
             buf: Vec::new(),
             len_elements: 0,
             size,

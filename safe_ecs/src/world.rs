@@ -8,7 +8,7 @@ use std::{
 use crate::{
     dynamic_storage::ErasedBytesVec,
     entities::{Entities, Entity, EntityMeta},
-    errors, query, LtPtr, LtPtrMut,
+    errors, query, LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
@@ -134,7 +134,7 @@ impl Storage for Box<dyn ErasedBytesVec> {
     }
 
     fn swap_remove_and_drop(&mut self, idx: usize) {
-        (&mut **self).move_end_to(idx);
+        (&mut **self).swap_remove(idx);
     }
 
     fn get_element_ptr(&self, idx: usize) -> LtPtr<'_> {
@@ -258,20 +258,14 @@ impl World {
             Some(id) => id,
             None => return Some(false),
         };
-        self.has_ecs_type_id(entity, ecs_type_id)
+        self.has_component_dynamic(entity, ecs_type_id)
     }
 
-    pub fn has_ecs_type_id(&self, entity: Entity, ecs_type_id: EcsTypeId) -> Option<bool> {
+    pub fn has_component_dynamic(&self, entity: Entity, id: EcsTypeId) -> Option<bool> {
         let archetype = self.entities.meta(entity)?.archetype;
-        Some(
-            self.archetypes[archetype]
-                .column_indices
-                .get(&ecs_type_id)
-                .is_some(),
-        )
+        Some(self.archetypes[archetype].column_indices.get(&id).is_some())
     }
 
-    // FIXME add a dynamic version
     pub fn get_component<T: Component>(&self, entity: Entity) -> Option<cell::Ref<T>> {
         if self.has_component::<T>(entity)? == false {
             return None;
@@ -288,7 +282,22 @@ impl World {
         ))
     }
 
-    // FIXME add a dynamic version
+    pub fn get_component_dynamic(
+        &self,
+        entity: Entity,
+        id: EcsTypeId,
+    ) -> Option<(usize, cell::Ref<dyn Storage>)> {
+        if self.has_component_dynamic(entity, id)? == false {
+            return None;
+        }
+
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
+        let archetype = &self.archetypes[archetype_id];
+        let entity_idx = archetype.get_entity_idx(entity).unwrap();
+        let column_idx = archetype.column_indices[&id];
+        Some((entity_idx, self.get_column(column_idx, id)))
+    }
+
     pub fn get_component_mut<T: Component>(&self, entity: Entity) -> Option<cell::RefMut<T>> {
         if self.has_component::<T>(entity)? == false {
             return None;
@@ -311,15 +320,94 @@ impl World {
         ))
     }
 
-    // FIXME add a dynamic version
+    pub fn get_component_mut_dynamic(
+        &self,
+        entity: Entity,
+        id: EcsTypeId,
+    ) -> Option<(usize, cell::RefMut<dyn Storage>)> {
+        if self.has_component_dynamic(entity, id)? == false {
+            return None;
+        }
+
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
+        let archetype = &self.archetypes[archetype_id];
+        let entity_idx = archetype.get_entity_idx(entity).unwrap();
+        let column_idx = archetype.column_indices[&id];
+        Some((entity_idx, self.get_column_mut(column_idx, id)))
+    }
+
+    pub fn get_component_mut_dynamic_ct(
+        &mut self,
+        entity: Entity,
+        id: EcsTypeId,
+    ) -> Option<(usize, &mut dyn Storage)> {
+        if self.has_component_dynamic(entity, id)? == false {
+            return None;
+        }
+
+        let archetype_id = self.entities.meta(entity).unwrap().archetype;
+        let archetype = &self.archetypes[archetype_id];
+        let entity_idx = archetype.get_entity_idx(entity).unwrap();
+        let column_idx = archetype.column_indices[&id];
+        Some((
+            entity_idx,
+            &mut *self.columns.get_mut(&id).unwrap().get_mut()[column_idx],
+        ))
+    }
+
     pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
         if self.has_component::<T>(entity)? == false {
             return None;
         }
         let ecs_type_id = self.type_to_ecs_type_id::<T>()?;
 
+        let (entity_idx, old_archetype) = self.move_entity_from_remove(entity, ecs_type_id)?;
+        let column_idx = *old_archetype.column_indices.get(&ecs_type_id).unwrap();
+        Some(
+            self.columns.get_mut(&ecs_type_id).unwrap().get_mut()[column_idx]
+                .as_typed_storage_mut()
+                .unwrap()
+                .as_vec_mut::<T>()
+                .unwrap()
+                .swap_remove(entity_idx),
+        )
+    }
+
+    pub fn remove_component_dynamic(
+        &mut self,
+        entity: Entity,
+        id: EcsTypeId,
+    ) -> Option<LtPtrOwn<'_>> {
+        if self.has_component_dynamic(entity, id)? == false {
+            return None;
+        }
+
+        let (entity_idx, old_archetype) = self.move_entity_from_remove(entity, id)?;
+
+        let column_idx = *old_archetype.column_indices.get(&id).unwrap();
+        Some(
+            self.columns.get_mut(&id).unwrap().get_mut()[column_idx]
+                .as_erased_storage_mut()
+                .unwrap()
+                .swap_remove(entity_idx)
+                .unwrap(),
+        )
+    }
+
+    /// Moves an entity between archetypes and all its components to new columns
+    /// from a `remove` operation. Caller should handle actually removing data
+    /// of `removed_id` from the column of the old archetype
+    fn move_entity_from_remove(
+        &mut self,
+        entity: Entity,
+        removed_id: EcsTypeId,
+    ) -> Option<(usize, &mut Archetype)> {
+        if self.is_alive(entity) == false {
+            return None;
+        }
+
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
-        let new_archetype_id = self.get_or_insert_archetype_from_remove(archetype_id, ecs_type_id);
+        let new_archetype_id = self.get_or_insert_archetype_from_remove(archetype_id, removed_id);
         *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
         };
@@ -336,31 +424,70 @@ impl World {
             old_column.swap_remove_move_to(new_column, entity_idx)
         }
         new_archetype.entities.push(entity);
-
-        let column_idx = *old_archetype.column_indices.get(&ecs_type_id).unwrap();
-        Some(
-            self.get_column_mut(column_idx, ecs_type_id)
-                .as_typed_storage_mut()
-                .unwrap()
-                .as_vec_mut::<T>()
-                .unwrap()
-                .swap_remove(entity_idx),
-        )
+        Some((entity_idx, old_archetype))
     }
 
-    // FIXME add a dynamic version
     pub fn insert_component<T: Component>(&mut self, entity: Entity, component: T) -> Option<T> {
-        if self.is_alive(entity) == false {
-            return None;
-        }
         let ecs_type_id = self.type_to_ecs_type_id_or_create::<T>();
-
         if let Some(mut old_component) = self.get_component_mut::<T>(entity) {
             return Some(std::mem::replace(&mut *old_component, component));
         }
 
+        let new_archetype = self.move_entity_from_insert(entity, ecs_type_id)?;
+
+        let column_idx = *new_archetype.column_indices.get(&ecs_type_id).unwrap();
+        self.columns.get_mut(&ecs_type_id).unwrap().get_mut()[column_idx]
+            .as_typed_storage_mut()
+            .unwrap()
+            .push(component);
+        None
+    }
+
+    pub fn insert_component_dynamic(
+        &mut self,
+        entity: Entity,
+        id: EcsTypeId,
+        write_fn: impl for<'a> FnOnce(LtPtrWriteOnly<'a>),
+    ) -> Option<LtPtrOwn<'_>> {
+        // no `if let` bcos borrowck is bad, gimme polonius >:(
+        if self.get_component_mut_dynamic_ct(entity, id).is_some() {
+            let (entity_idx, storage) = self.get_component_mut_dynamic_ct(entity, id).unwrap();
+            let storage = storage.as_erased_storage_mut().unwrap();
+            let (inserted_over, uninit_idx) = storage.copy_to_insert_over_space(entity_idx);
+            write_fn(uninit_idx);
+            return Some(inserted_over);
+        }
+
+        let new_archetype = self.move_entity_from_insert(entity, id)?;
+
+        let column_idx = *new_archetype.column_indices.get(&id).unwrap();
+
+        let mut column = self.get_column_mut(column_idx, id);
+        let erased_storage = column.as_erased_storage_mut().unwrap();
+        let num_elements = erased_storage.num_elements();
+        erased_storage.realloc_if_full();
+        write_fn(LtPtrWriteOnly(
+            Default::default(),
+            erased_storage.get_element_ptr_mut(num_elements).1,
+        ));
+        erased_storage.incr_len();
+        None
+    }
+
+    /// Moves an entity between archetypes and all its components to new columns
+    /// from an `insert` operation. Caller should handle actually inserting data
+    /// of `insert_id` into the column of the new archetype
+    fn move_entity_from_insert(
+        &mut self,
+        entity: Entity,
+        inserted_id: EcsTypeId,
+    ) -> Option<&mut Archetype> {
+        if self.is_alive(entity) == false {
+            return None;
+        }
+
         let archetype_id = self.entities.meta(entity).unwrap().archetype;
-        let new_archetype_id = self.get_or_insert_archetype_from_insert(archetype_id, ecs_type_id);
+        let new_archetype_id = self.get_or_insert_archetype_from_insert(archetype_id, inserted_id);
         *self.entities.meta_mut(entity).unwrap() = EntityMeta {
             archetype: new_archetype_id,
         };
@@ -377,13 +504,7 @@ impl World {
             old_column.swap_remove_move_to(new_column, entity_idx);
         }
         new_archetype.entities.push(entity);
-
-        let column_idx = *new_archetype.column_indices.get(&ecs_type_id).unwrap();
-        self.get_column_mut(column_idx, ecs_type_id)
-            .as_typed_storage_mut()
-            .unwrap()
-            .push(component);
-        None
+        Some(new_archetype)
     }
 
     pub fn query<Q: query::QueryParam>(
