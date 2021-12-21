@@ -68,6 +68,11 @@ where
     }
 
     fn swap_remove_move_to(&mut self, other: &mut dyn ErasedBytesVec, idx: usize) {
+        if self.len_elements == 0 {
+            panic!("");
+        }
+
+        other.realloc_if_full();
         let other = other.unerase_alignement_mut::<A>();
         let src = index_range_of_element(self.size, A, idx);
         let src = &mut self.buf[src];
@@ -77,6 +82,8 @@ where
         for (src, dst) in src.into_iter().zip(dst.into_iter()) {
             *dst = *src;
         }
+
+        other.incr_len();
 
         self.swap_remove(idx);
     }

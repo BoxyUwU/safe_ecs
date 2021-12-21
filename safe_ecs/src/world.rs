@@ -11,7 +11,7 @@ use crate::{
     errors, query, LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly,
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct EcsTypeId(usize);
 
 pub trait Component: 'static {}
@@ -146,6 +146,7 @@ impl Storage for Box<dyn ErasedBytesVec> {
     }
 }
 
+#[derive(Debug)]
 pub struct Archetype {
     pub(crate) entities: Vec<Entity>,
     pub(crate) column_indices: HashMap<EcsTypeId, usize>,
@@ -753,5 +754,187 @@ mod tests {
         world.insert_component(e, 10_u32).unwrap_none();
         world.despawn(e);
         world.remove_component::<u32>(e).unwrap_none();
+    }
+}
+
+#[cfg(test)]
+mod dynamic_tests {
+    use super::*;
+    use std::alloc::Layout;
+
+    trait UnwrapNone {
+        fn unwrap_none(self);
+    }
+
+    impl<T> UnwrapNone for Option<T> {
+        fn unwrap_none(self) {
+            match self {
+                Some(_) => panic!("expected `None` found `Some(_)`"),
+                None => (),
+            }
+        }
+    }
+
+    #[test]
+    fn has_component_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        assert_eq!(world.has_component_dynamic(e, id_u32).unwrap(), false);
+    }
+
+    #[test]
+    fn basic_insert_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+
+        world
+            .insert_component_dynamic(e, id_u32, |ptr| unsafe {
+                *(ptr.1 as *mut u32) = 10;
+            })
+            .unwrap_none();
+
+        let (idx, storage) = world.get_component_mut_dynamic(e, id_u32).unwrap();
+        assert_eq!(unsafe { *(storage.get_element_ptr(idx).1 as *mut u32) }, 10);
+    }
+
+    #[test]
+    fn insert_overwrite_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+
+        world
+            .insert_component_dynamic(e, id_u32, |ptr| unsafe {
+                *(ptr.1 as *mut u32) = 10;
+            })
+            .unwrap_none();
+
+        let (idx, storage) = world.get_component_dynamic(e, id_u32).unwrap();
+        assert_eq!(unsafe { *(storage.get_element_ptr(idx).1 as *mut u32) }, 10);
+    }
+
+    #[test]
+    fn insert_archetype_change_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        let id_u64 = world.new_dynamic_ecs_type_id(Layout::new::<u64>());
+
+        world
+            .insert_component_dynamic(e, id_u32, |ptr| unsafe {
+                *(ptr.1 as *mut u32) = 10;
+            })
+            .unwrap_none();
+        world
+            .insert_component_dynamic(e, id_u64, |ptr| unsafe {
+                *(ptr.1 as *mut u64) = 12;
+            })
+            .unwrap_none();
+
+        assert_eq!(
+            unsafe {
+                *(world
+                    .insert_component_dynamic(e, id_u32, |ptr| {
+                        *(ptr.1 as *mut u32) = 15;
+                    })
+                    .unwrap()
+                    .1 as *const u32)
+            },
+            10
+        );
+
+        let (idx, storage) = world.get_component_dynamic(e, id_u32).unwrap();
+        assert_eq!(unsafe { *(storage.get_element_ptr(idx).1 as *mut u32) }, 15);
+
+        let (idx, storage) = world.get_component_dynamic(e, id_u64).unwrap();
+        assert_eq!(unsafe { *(storage.get_element_ptr(idx).1 as *mut u64) }, 12);
+    }
+
+    #[test]
+    fn insert_on_dead_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        world
+            .insert_component_dynamic(e, id_u32, |ptr| unsafe {
+                *(ptr.1 as *mut u32) = 10;
+            })
+            .unwrap_none();
+        world.despawn(e);
+        world
+            .insert_component_dynamic(e, id_u32, |_| unreachable!(""))
+            .unwrap_none();
+    }
+
+    #[test]
+    fn basic_remove_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        world.remove_component_dynamic(e, id_u32).unwrap_none();
+        world
+            .insert_component_dynamic(e, id_u32, |ptr| unsafe {
+                *(ptr.1 as *mut u32) = 10;
+            })
+            .unwrap_none();
+
+        let ptr = world.remove_component_dynamic(e, id_u32).unwrap();
+        assert_eq!(unsafe { *(ptr.1 as *const u32) }, 10);
+
+        world.remove_component_dynamic(e, id_u32).unwrap_none();
+    }
+
+    #[test]
+    fn remove_archetype_change_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let id_u32 = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        let id_u64 = world.new_dynamic_ecs_type_id(Layout::new::<u64>());
+        world
+            .insert_component_dynamic(e, id_u32, |ptr| unsafe {
+                *(ptr.1 as *mut u32) = 10;
+            })
+            .unwrap_none();
+        world
+            .insert_component_dynamic(e, id_u64, |ptr| unsafe {
+                *(ptr.1 as *mut u64) = 12;
+            })
+            .unwrap_none();
+
+        assert_eq!(
+            unsafe {
+                *(world
+                    .insert_component_dynamic(e, id_u32, |ptr| {
+                        *(ptr.1 as *mut u32) = 15;
+                    })
+                    .unwrap()
+                    .1 as *const u32)
+            },
+            10_u32
+        );
+
+        world.remove_component_dynamic(e, id_u64).unwrap();
+
+        let (idx, mut storage) = world.get_component_mut_dynamic(e, id_u32).unwrap();
+        assert_eq!(
+            unsafe { *(storage.get_element_ptr_mut(idx).1 as *mut u32) },
+            15
+        );
+
+        assert_eq!(world.has_component_dynamic(e, id_u64).unwrap(), false)
+    }
+
+    #[test]
+    fn remove_on_dead_dynamic() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let ecs_id = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        world.insert_component_dynamic(e, ecs_id, |ptr| unsafe {
+            *(ptr.1 as *mut u32) = 4;
+        });
+        world.despawn(e);
+        world.remove_component_dynamic(e, ecs_id).unwrap_none();
     }
 }
