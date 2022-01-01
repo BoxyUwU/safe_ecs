@@ -511,7 +511,11 @@ impl World {
     pub fn query<Q: query::QueryParam>(
         &self,
     ) -> Result<query::Query<'_, Q>, errors::WorldBorrowError> {
-        Ok(query::Query(self, Q::lock_from_world(self)?))
+        Ok(query::Query {
+            w: self,
+            locks: Q::lock_from_world(self)?.map(|lock| (lock, Vec::new())),
+            dyn_params: Vec::new(),
+        })
     }
 
     pub fn access_scope<Out, Args, Func: crate::ToSystem<Args, Out>>(

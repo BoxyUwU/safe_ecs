@@ -31,6 +31,9 @@ pub trait ErasedBytesVec {
 
     fn erased_as_any(&self) -> &dyn Any;
     fn erased_as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn iter(&self) -> Box<dyn Iterator<Item = *mut u8> + '_>;
+    fn iter_mut(&mut self) -> Box<dyn Iterator<Item = *mut u8> + '_>;
 }
 impl<const A: usize> ErasedBytesVec for AlignedBytesVec<A>
 where
@@ -151,6 +154,31 @@ where
 
     fn erased_as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = *mut u8> + '_> {
+        match self.size {
+            0 => Box::new(std::iter::repeat(self.buf.as_ptr() as *mut u8).take(self.len_elements)),
+            _ => Box::new(
+                self.buf
+                    .chunks(self.size / A)
+                    .map(|chunk| chunk as *const [<() as AlignTo<A>>::Aligned] as *mut u8)
+                    .take(self.len_elements),
+            ),
+        }
+    }
+    fn iter_mut(&mut self) -> Box<dyn Iterator<Item = *mut u8> + '_> {
+        match self.size {
+            0 => Box::new(
+                std::iter::repeat(self.buf.as_mut_ptr() as *mut u8).take(self.len_elements),
+            ),
+            _ => Box::new(
+                self.buf
+                    .chunks_mut(self.size / A)
+                    .map(|chunk| chunk as *mut [<() as AlignTo<A>>::Aligned] as *mut u8)
+                    .take(self.len_elements),
+            ),
+        }
     }
 }
 impl dyn ErasedBytesVec + '_ {

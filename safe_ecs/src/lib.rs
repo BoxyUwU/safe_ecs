@@ -11,7 +11,7 @@ mod world;
 
 pub use commands::{Command, CommandBuffer, Commands, CommandsWithEntity};
 pub use entities::Entity;
-pub use query::{Maybe, Query, QueryIter};
+pub use query::{DynQueryParam, DynQueryParamKind, Maybe, Query, QueryIter};
 pub use safe_ecs_derive::Component;
 pub use scope::Scope;
 pub use system::{Access, System, SystemParam, ToSystem};

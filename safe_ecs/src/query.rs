@@ -36,6 +36,41 @@ pub trait QueryParam: 'static {
     fn get_access() -> Result<Access, ()>;
 }
 
+impl QueryParam for () {
+    type Lock<'a> = ();
+    type LockBorrow<'a> = ();
+    type Item<'a> = ();
+    type ItemIter<'a> = std::ops::Range<usize>;
+
+    fn lock_from_world(_: &World) -> Result<Option<Self::Lock<'_>>, WorldBorrowError> {
+        Ok(Some(()))
+    }
+
+    fn lock_borrows_from_locks<'a, 'b>(_: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
+        ()
+    }
+
+    fn archetype_matches(_: &Archetype, _: &HashMap<TypeId, EcsTypeId>) -> bool {
+        true
+    }
+
+    fn item_iter_from_archetype<'a>(
+        archetype: &'a Archetype,
+        _: &mut Self::LockBorrow<'a>,
+        _: &HashMap<TypeId, EcsTypeId>,
+    ) -> Self::ItemIter<'a> {
+        0..archetype.entities.len()
+    }
+
+    fn advance_iter<'a>(iter: &mut Self::ItemIter<'a>) -> Option<Self::Item<'a>> {
+        iter.next().map(|_| ())
+    }
+
+    fn get_access() -> Result<Access, ()> {
+        Ok(Access::new())
+    }
+}
+
 impl QueryParam for Entity {
     type Lock<'a> = ();
     type LockBorrow<'a> = ();
@@ -305,10 +340,72 @@ impl<Q: QueryParam> QueryParam for Maybe<Q> {
     }
 }
 
-pub struct Query<'a, Q: QueryParam + 'static>(pub(crate) &'a World, pub(crate) Option<Q::Lock<'a>>);
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct DynQueryParam {
+    id: EcsTypeId,
+    kind: DynQueryParamKind,
+}
+
+impl DynQueryParam {
+    pub fn new_ref(id: EcsTypeId) -> Self {
+        Self {
+            id,
+            kind: DynQueryParamKind::Ref,
+        }
+    }
+
+    pub fn new_mut(id: EcsTypeId) -> Self {
+        Self {
+            id,
+            kind: DynQueryParamKind::Mut,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum DynQueryParamKind {
+    Mut,
+    Ref,
+}
+
+pub enum DynQueryParamLock<'a> {
+    Mut(cell::RefMut<'a, Vec<Box<dyn Storage>>>),
+    Ref(cell::Ref<'a, Vec<Box<dyn Storage>>>),
+}
+
+pub enum DynQueryParamLockBorrow<'a> {
+    Mut(usize, &'a mut [Box<dyn Storage>]),
+    Ref(&'a [Box<dyn Storage>]),
+}
+
+pub struct Query<'a, Q: QueryParam + 'static> {
+    pub(crate) w: &'a World,
+    pub(crate) locks: Option<(Q::Lock<'a>, Vec<DynQueryParamLock<'a>>)>,
+    pub(crate) dyn_params: Vec<DynQueryParam>,
+}
+
+// TODO add `DynQueryParam::MaybeMut/Ref`
+// TODO test all this stuff
+
 impl<'b, Q: QueryParam> Query<'b, Q> {
     pub fn iter_mut(&mut self) -> QueryIter<'_, 'b, Q> {
         QueryIter::new(self)
+    }
+
+    pub fn add_dyn_param(&mut self, param: DynQueryParam) -> &mut Self {
+        self.dyn_params.push(param);
+        if let Some((_, dyn_locks)) = &mut self.locks {
+            match param.kind {
+                DynQueryParamKind::Mut => dyn_locks.push(DynQueryParamLock::Mut(
+                    self.w.columns[&param.id].borrow_mut(),
+                )),
+                DynQueryParamKind::Ref => {
+                    dyn_locks.push(DynQueryParamLock::Ref(self.w.columns[&param.id].borrow()))
+                }
+            }
+        }
+
+        self
     }
 }
 impl<'a, 'b: 'a, Q: QueryParam> IntoIterator for &'a mut Query<'b, Q> {
@@ -324,29 +421,56 @@ pub struct QueryIter<'a, 'b: 'a, Q: QueryParam> {
     ecs_type_ids: &'a HashMap<TypeId, EcsTypeId>,
     /// `None` if we couldnt acquire the locks because
     /// one of the columns had not been created yet
-    borrows: Option<Q::LockBorrow<'a>>,
-    archetype_iter: ArchetypeIter<'b, Q>,
-    item_iters: Option<Q::ItemIter<'a>>,
+    borrows: Option<(Q::LockBorrow<'a>, Vec<DynQueryParamLockBorrow<'a>>)>,
+    archetype_iter: ArchetypeIter<'a, 'b, Q>,
+    item_iters: Option<(Q::ItemIter<'a>, Vec<Box<dyn Iterator<Item = *mut u8> + 'a>>)>,
+
+    dyn_params: &'a [DynQueryParam],
+    dyn_param_data_ptrs: Vec<*mut u8>,
 }
 
-type ArchetypeIter<'b, Q> = impl Iterator<Item = &'b Archetype> + 'b;
+type ArchetypeIter<'a, 'b: 'a, Q> = impl Iterator<Item = &'b Archetype> + 'a;
 impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
     fn new(borrows: &'a mut Query<'b, Q>) -> Self {
-        fn defining_use<'b, Q: QueryParam>(world: &'b World) -> ArchetypeIter<'b, Q> {
+        fn defining_use<'a, 'b: 'a, Q: QueryParam>(
+            world: &'b World,
+            dyn_params: &'a [DynQueryParam],
+        ) -> ArchetypeIter<'a, 'b, Q> {
             world
                 .archetypes
                 .iter()
                 .filter(|archetype| Q::archetype_matches(archetype, &world.ecs_type_ids))
+                .filter(|archetype| {
+                    dyn_params.iter().all(|param| {
+                        use DynQueryParamKind::*;
+                        match &param.kind {
+                            Mut | Ref => archetype.column_indices.contains_key(&param.id),
+                        }
+                    })
+                })
         }
 
         Self {
-            ecs_type_ids: &borrows.0.ecs_type_ids,
-            archetype_iter: defining_use::<Q>(borrows.0),
-            borrows: borrows
-                .1
-                .as_mut()
-                .map(|locks| Q::lock_borrows_from_locks(locks)),
+            ecs_type_ids: &borrows.w.ecs_type_ids,
+            archetype_iter: defining_use::<Q>(borrows.w, &borrows.dyn_params[..]),
+            borrows: borrows.locks.as_mut().map(|(locks, dyn_locks)| {
+                (
+                    Q::lock_borrows_from_locks(locks),
+                    dyn_locks
+                        .iter_mut()
+                        .map(|lock| match lock {
+                            DynQueryParamLock::Mut(r) => {
+                                DynQueryParamLockBorrow::Mut(0, &mut r[..])
+                            }
+                            DynQueryParamLock::Ref(r) => DynQueryParamLockBorrow::Ref(&r[..]),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }),
             item_iters: None,
+
+            dyn_params: &borrows.dyn_params[..],
+            dyn_param_data_ptrs: vec![std::ptr::null_mut(); borrows.dyn_params.len()],
         }
     }
 }
@@ -354,27 +478,77 @@ impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
 impl<'a, 'b: 'a, Q: QueryParam> Iterator for QueryIter<'a, 'b, Q> {
     type Item = Q::Item<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        let borrows = self.borrows.as_mut()?;
-        loop {
+        let (borrows, dyn_borrows) = self.borrows.as_mut()?;
+        'outer: loop {
             if let None = &self.item_iters {
                 let archetype = self.archetype_iter.next()?;
-                self.item_iters = Some(Q::item_iter_from_archetype(
-                    archetype,
-                    borrows,
-                    self.ecs_type_ids,
+                self.item_iters = Some((
+                    Q::item_iter_from_archetype(archetype, borrows, self.ecs_type_ids),
+                    self.dyn_params
+                        .iter()
+                        .zip(dyn_borrows.iter_mut())
+                        .map(|(param, borrow)| match borrow {
+                            DynQueryParamLockBorrow::Mut(num_chopped_off, storages) => {
+                                let col = archetype.column_indices[&param.id];
+                                assert!(col >= *num_chopped_off);
+                                let idx = col - *num_chopped_off;
+                                let taken_out_borrow = std::mem::replace(storages, &mut []);
+                                let (chopped_of, remaining) =
+                                    taken_out_borrow.split_at_mut(idx + 1);
+                                *storages = remaining;
+                                *num_chopped_off += chopped_of.len();
+                                chopped_of
+                                    .last_mut()
+                                    .unwrap()
+                                    .as_erased_storage_mut()
+                                    .unwrap()
+                                    .iter_mut()
+                            }
+                            DynQueryParamLockBorrow::Ref(storages) => {
+                                let col = archetype.column_indices[&param.id];
+                                let storage = storages[col].as_erased_storage().unwrap();
+                                storage.iter()
+                            }
+                        })
+                        .collect(),
                 ));
             }
 
-            match Q::advance_iter(self.item_iters.as_mut().unwrap()) {
-                Some(item) => return Some(item),
+            let (static_iters, dyn_iters) = self.item_iters.as_mut().unwrap();
+            match Q::advance_iter(static_iters) {
+                Some(item) => {
+                    for (data_ptr, iter) in self
+                        .dyn_param_data_ptrs
+                        .iter_mut()
+                        .zip(dyn_iters.iter_mut())
+                    {
+                        match iter.next() {
+                            None => {
+                                self.item_iters = None;
+                                continue 'outer;
+                            }
+                            Some(ptr) => {
+                                *data_ptr = ptr;
+                            }
+                        }
+                    }
+                    return Some(item);
+                }
                 None => self.item_iters = None,
             }
         }
     }
 }
 
+impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
+    pub fn next_dynamic(&mut self) -> Option<(<Self as Iterator>::Item, &mut [*mut u8])> {
+        self.next()
+            .map(|item| (item, &mut self.dyn_param_data_ptrs[..]))
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod static_tests {
     use super::*;
     use crate::world::*;
 
@@ -476,5 +650,54 @@ mod tests {
         assert_eq!(iter.next(), Some((e1, None, &10_u32)));
         assert_eq!(iter.next(), Some((e2, None, &12_u32)));
         assert_eq!(iter.next(), None);
+    }
+}
+
+#[cfg(test)]
+mod dynamic_tests {
+    use super::*;
+    use crate::world::*;
+    use std::alloc::Layout;
+
+    #[test]
+    fn simple_query_dynamic() {
+        let mut world = World::new();
+        let u32_id = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+        let u64_id = world.new_dynamic_ecs_type_id(Layout::new::<u64>());
+        let u128_id = world.new_dynamic_ecs_type_id(Layout::new::<u128>());
+
+        let e1 = world.spawn().id();
+        world.insert_component_dynamic(e1, u32_id, |ptr| unsafe { *(ptr.1 as *mut u32) = 10 });
+        world.insert_component_dynamic(e1, u64_id, |ptr| unsafe { *(ptr.1 as *mut u64) = 12 });
+
+        let e2 = world.spawn().id();
+        world.insert_component_dynamic(e2, u64_id, |ptr| unsafe { *(ptr.1 as *mut u64) = 13 });
+        world.insert_component_dynamic(e2, u128_id, |ptr| unsafe { *(ptr.1 as *mut u128) = 9 });
+
+        let mut q = world.query::<()>().unwrap();
+        q.add_dyn_param(DynQueryParam::new_ref(u64_id));
+
+        let mut q_iter = q.iter_mut();
+
+        let (_, r1) = q_iter.next_dynamic().unwrap();
+        assert_eq!(unsafe { *(r1[0] as *mut u64) }, 12);
+
+        let (_, r2) = q_iter.next_dynamic().unwrap();
+        assert_eq!(unsafe { *(r2[0] as *mut u64) }, 13);
+
+        assert_eq!(q_iter.next_dynamic(), None);
+    }
+
+    #[test]
+    fn uncreated_column() {
+        let mut world = World::new();
+        let _ = world.spawn().id();
+        let u32_id = world.new_dynamic_ecs_type_id(Layout::new::<u32>());
+
+        let mut q = world.query::<()>().unwrap();
+        q.add_dyn_param(DynQueryParam::new_ref(u32_id));
+
+        let mut q_iter = q.iter_mut();
+        assert_eq!(q_iter.next_dynamic(), None);
     }
 }
