@@ -2,6 +2,10 @@
 name = "safe_ecs_derive"
 version = "0.1.0"
 edition = "2021"
+homepage = "https://github.com/BoxyUwU/safe_ecs"
+repository = "https://github.com/BoxyUwU/safe_ecs"
+description = "proc macro crate for `safe_ecs`"
+license = "MIT"
 
 [lib]
 proc-macro = true

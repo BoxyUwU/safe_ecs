@@ -2,6 +2,10 @@
 name = "safe_ecs"
 version = "0.1.0"
 edition = "2021"
+homepage = "https://github.com/BoxyUwU/safe_ecs"
+repository = "https://github.com/BoxyUwU/safe_ecs"
+description = "ECS written in safe code"
+license = "MIT"
 
 [dependencies]
-safe_ecs_derive = { path = "../safe_ecs_derive" }
+safe_ecs_derive = "0.1"
