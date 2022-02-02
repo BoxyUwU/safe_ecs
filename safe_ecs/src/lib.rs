@@ -15,7 +15,7 @@ pub use query::{DynQueryParam, DynQueryParamKind, Maybe, Query, QueryIter};
 pub use safe_ecs_derive::Component;
 pub use scope::Scope;
 pub use system::{Access, System, SystemParam, ToSystem};
-pub use world::{Component, EntityBuilder, World};
+pub use world::{Component, EcsTypeId, EntityBuilder, World};
 
 pub mod errors {
     #[derive(Debug, Copy, Clone)]
