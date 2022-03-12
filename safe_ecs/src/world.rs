@@ -10,7 +10,7 @@ use std::{
 use crate::{
     dynamic_storage::ErasedBytesVec,
     entities::{Entities, Entity, EntityMeta},
-    errors, query, LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly,
+    errors, CommandBuffer, Commands, LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
@@ -38,6 +38,7 @@ impl dyn Columns {
         self.as_any_mut().downcast_mut().unwrap()
     }
 
+    // FIXME reimplement dynamic queries
     pub(crate) fn as_dynamic(&self) -> &DynamicColumns {
         self.as_any().downcast_ref().unwrap()
     }
@@ -46,10 +47,10 @@ impl dyn Columns {
     }
 }
 
-pub struct StaticColumns<T>(pub(crate) Vec<Vec<T>>);
+pub struct StaticColumns<T>(pub(crate) Vec<Vec<T>>, pub(crate) EcsTypeId);
 impl<T: Component> StaticColumns<T> {
-    pub fn new() -> Box<dyn Columns> {
-        Box::new(StaticColumns::<T>(vec![vec![]]))
+    pub fn new(id: EcsTypeId) -> Box<dyn Columns> {
+        Box::new(StaticColumns::<T>(vec![vec![]], id))
     }
 }
 impl<T: Component> Index<usize> for StaticColumns<T> {
@@ -320,8 +321,10 @@ impl World {
             .0
             .checked_add(1)
             .expect("girl why u making usize::MAX ecs_type_ids");
-        self.columns
-            .insert(ecs_type_id, RefCell::new(StaticColumns::<T>::new()));
+        self.columns.insert(
+            ecs_type_id,
+            RefCell::new(StaticColumns::<T>::new(ecs_type_id)),
+        );
         Some(ecs_type_id)
     }
 
@@ -626,22 +629,32 @@ impl World {
         Some(new_archetype)
     }
 
-    pub fn query<Q: query::QueryParam>(
+    pub fn borrow<T: Component>(
         &self,
-    ) -> Result<query::Query<'_, Q>, errors::WorldBorrowError> {
-        Ok(query::Query {
-            w: self,
-            locks: Q::lock_from_world(self)?.map(|lock| (lock, Vec::new())),
-            dyn_params: Vec::new(),
-        })
+    ) -> Result<cell::Ref<'_, StaticColumns<T>>, errors::WorldBorrowError> {
+        let ecs_type_id = self.ecs_type_ids[&TypeId::of::<T>()];
+        self.columns[&ecs_type_id]
+            .try_borrow()
+            .map(|ok| cell::Ref::map(ok, |columns| columns.as_static::<T>()))
+            .map_err(|_| errors::WorldBorrowError(std::any::type_name::<T>()))
     }
 
-    pub fn access_scope<Out, Args, Func: crate::ToSystem<Args, Out>>(
-        &mut self,
-        system: Func,
-    ) -> Out {
-        let mut system = system.system();
-        system.run(self)
+    pub fn borrow_mut<T: Component>(
+        &self,
+    ) -> Result<cell::RefMut<'_, StaticColumns<T>>, errors::WorldBorrowError> {
+        let ecs_type_id = self.ecs_type_ids[&TypeId::of::<T>()];
+        self.columns[&ecs_type_id]
+            .try_borrow_mut()
+            .map(|ok| cell::RefMut::map(ok, |columns| columns.as_static_mut::<T>()))
+            .map_err(|_| errors::WorldBorrowError(std::any::type_name::<T>()))
+    }
+
+    pub fn command_scope<R>(&mut self, f: impl FnOnce(Commands<'_>) -> R) -> R {
+        let mut buffer = CommandBuffer::new();
+        let commands = Commands(&mut buffer, self);
+        let r = f(commands);
+        buffer.apply(self);
+        r
     }
 }
 

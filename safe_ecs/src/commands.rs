@@ -84,14 +84,14 @@ mod tests {
     fn basic_insert() {
         let mut world = World::new();
         let e = world.spawn().id();
-        world.access_scope(|mut cmds: Commands| {
+        world.command_scope(|mut cmds| {
             cmds.entity(e).insert(10_u32).insert(12_u64).remove::<u32>();
         });
-        let mut q = world.query::<&u32>().unwrap();
-        let mut iter = q.iter_mut();
+        let q = &*world.borrow::<u32>().unwrap();
+        let mut iter = ColumnIterator::new(q, &world);
         assert_eq!(iter.next(), None);
-        let mut q = world.query::<&u64>().unwrap();
-        let mut iter = q.iter_mut();
+        let q = &*world.borrow::<u64>().unwrap();
+        let mut iter = ColumnIterator::new(q, &world);
         assert_eq!(iter.next(), Some(&12));
         assert_eq!(iter.next(), None);
     }
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn spawn() {
         let mut world = World::new();
-        let e1 = world.access_scope(|mut cmds: Commands| {
+        let e1 = world.command_scope(|mut cmds| {
             cmds.spawn()
                 .insert(10_u32)
                 .insert(12_u64)
@@ -107,11 +107,11 @@ mod tests {
                 .id()
         });
 
-        let mut q = world.query::<(Entity, &u32)>().unwrap();
-        let mut iter = q.iter_mut();
+        let q = &*world.borrow::<u32>().unwrap();
+        let mut iter = ColumnIterator::new((WithEntities, q), &world);
         assert_eq!(iter.next(), None);
-        let mut q = world.query::<(Entity, &u64)>().unwrap();
-        let mut iter = q.iter_mut();
+        let q = &*world.borrow::<u64>().unwrap();
+        let mut iter = ColumnIterator::new((WithEntities, q), &world);
         assert_eq!(iter.next(), Some((e1, &12)));
         assert_eq!(iter.next(), None);
     }

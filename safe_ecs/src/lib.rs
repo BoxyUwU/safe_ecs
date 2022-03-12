@@ -1,21 +1,24 @@
 #![cfg_attr(not(test), forbid(unsafe_code))]
-#![feature(map_try_insert, type_alias_impl_trait, generic_associated_types)]
+#![feature(
+    let_else,
+    map_try_insert,
+    type_alias_impl_trait,
+    generic_associated_types
+)]
 
+mod column_join;
 mod commands;
 mod dynamic_storage;
 mod entities;
-mod query;
 mod scope;
-mod system;
 mod world;
 
+pub use column_join::{ColumnIterator, Joinable, Maybe, WithEntities};
 pub use commands::{Command, CommandBuffer, Commands, CommandsWithEntity};
 pub use entities::Entity;
-pub use query::{DynQueryParam, DynQueryParamKind, Maybe, Query, QueryIter};
 pub use safe_ecs_derive::Component;
 pub use scope::Scope;
-pub use system::{Access, System, SystemParam, ToSystem};
-pub use world::{Component, EcsTypeId, EntityBuilder, World};
+pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, StaticColumns, World};
 
 pub mod errors {
     #[derive(Debug, Copy, Clone)]
