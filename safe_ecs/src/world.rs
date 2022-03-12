@@ -1,8 +1,10 @@
 use std::{
+    alloc::Layout,
     any::{Any, TypeId},
     cell::{self, RefCell},
     collections::HashMap,
     mem::MaybeUninit,
+    ops::{Index, IndexMut},
 };
 
 use crate::{
@@ -16,6 +18,126 @@ pub struct EcsTypeId(usize);
 
 pub trait Component: 'static {}
 
+pub trait Columns: Index<usize, Output = dyn Storage> + IndexMut<usize> + 'static {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn get_two_storages_mut(
+        &mut self,
+        idx_1: usize,
+        idx_2: usize,
+    ) -> (&mut dyn Storage, &mut dyn Storage);
+    fn push_empty_column(&mut self);
+    fn len(&self) -> usize;
+}
+
+impl dyn Columns {
+    pub(crate) fn as_static<T: Component>(&self) -> &StaticColumns<T> {
+        self.as_any().downcast_ref().unwrap()
+    }
+    pub(crate) fn as_static_mut<T: Component>(&mut self) -> &mut StaticColumns<T> {
+        self.as_any_mut().downcast_mut().unwrap()
+    }
+
+    pub(crate) fn as_dynamic(&self) -> &DynamicColumns {
+        self.as_any().downcast_ref().unwrap()
+    }
+    pub(crate) fn as_dynamic_mut(&mut self) -> &mut DynamicColumns {
+        self.as_any_mut().downcast_mut().unwrap()
+    }
+}
+
+pub struct StaticColumns<T>(pub(crate) Vec<Vec<T>>);
+impl<T: Component> StaticColumns<T> {
+    pub fn new() -> Box<dyn Columns> {
+        Box::new(StaticColumns::<T>(vec![vec![]]))
+    }
+}
+impl<T: Component> Index<usize> for StaticColumns<T> {
+    type Output = dyn Storage;
+    fn index(&self, idx: usize) -> &Self::Output {
+        let storage: &Vec<T> = &self.0[idx];
+        storage
+    }
+}
+impl<T: Component> IndexMut<usize> for StaticColumns<T> {
+    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+        let storage: &mut Vec<T> = &mut self.0[idx];
+        storage
+    }
+}
+impl<T: Component> Columns for StaticColumns<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn get_two_storages_mut(
+        &mut self,
+        idx_1: usize,
+        idx_2: usize,
+    ) -> (&mut dyn Storage, &mut dyn Storage) {
+        let (a, b) = get_two_mut(&mut self.0[..], idx_1, idx_2);
+        (a, b)
+    }
+
+    fn push_empty_column(&mut self) {
+        self.0.push(vec![]);
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+pub struct DynamicColumns(pub(crate) Vec<Box<dyn ErasedBytesVec>>);
+impl DynamicColumns {
+    pub fn new(layout: Layout) -> Box<dyn Columns> {
+        Box::new(DynamicColumns(vec![
+            crate::dynamic_storage::make_aligned_vec(layout),
+        ]))
+    }
+}
+impl Index<usize> for DynamicColumns {
+    type Output = dyn Storage;
+    fn index(&self, idx: usize) -> &Self::Output {
+        let storage: &Box<dyn ErasedBytesVec> = &self.0[idx];
+        storage
+    }
+}
+impl IndexMut<usize> for DynamicColumns {
+    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+        let storage: &mut Box<dyn ErasedBytesVec> = &mut self.0[idx];
+        storage
+    }
+}
+impl Columns for DynamicColumns {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn get_two_storages_mut(
+        &mut self,
+        idx_1: usize,
+        idx_2: usize,
+    ) -> (&mut dyn Storage, &mut dyn Storage) {
+        let (a, b) = get_two_mut(&mut self.0[..], idx_1, idx_2);
+        (a, b)
+    }
+
+    fn push_empty_column(&mut self) {
+        self.0.push(self.0[0].empty_of_same_layout());
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 pub trait Storage: 'static {
     fn as_typed_storage(&self) -> Option<&dyn TypedStorage>;
     fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage>;
@@ -25,7 +147,7 @@ pub trait Storage: 'static {
 
     fn empty_of_same_type(&self) -> Box<dyn Storage>;
 
-    fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize);
+    fn swap_remove_move_to(&mut self, other: &mut dyn Storage, idx: usize);
     fn swap_remove_and_drop(&mut self, idx: usize);
 
     fn get_element_ptr(&self, idx: usize) -> LtPtr<'_>;
@@ -58,7 +180,7 @@ impl<T: Component> Storage for Vec<T> {
         Box::new(Vec::<T>::new())
     }
 
-    fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize) {
+    fn swap_remove_move_to(&mut self, other: &mut dyn Storage, idx: usize) {
         let other = other
             .as_typed_storage_mut()
             .unwrap()
@@ -128,7 +250,7 @@ impl Storage for Box<dyn ErasedBytesVec> {
         Box::new(self.empty_of_same_layout())
     }
 
-    fn swap_remove_move_to(&mut self, other: &mut Box<dyn Storage>, idx: usize) {
+    fn swap_remove_move_to(&mut self, other: &mut dyn Storage, idx: usize) {
         let other = other.as_erased_storage_mut().unwrap();
         (&mut **self).swap_remove_move_to(other, idx);
     }
@@ -161,7 +283,7 @@ impl Archetype {
 pub struct World {
     pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
-    pub(crate) columns: HashMap<EcsTypeId, RefCell<Vec<Box<dyn Storage>>>>,
+    pub(crate) columns: HashMap<EcsTypeId, RefCell<Box<dyn Columns>>>,
     next_ecs_type_id: EcsTypeId,
     pub(crate) ecs_type_ids: HashMap<TypeId, EcsTypeId>,
 }
@@ -199,7 +321,7 @@ impl World {
             .checked_add(1)
             .expect("girl why u making usize::MAX ecs_type_ids");
         self.columns
-            .insert(ecs_type_id, RefCell::new(vec![Box::new(Vec::<T>::new())]));
+            .insert(ecs_type_id, RefCell::new(StaticColumns::<T>::new()));
         Some(ecs_type_id)
     }
 
@@ -209,12 +331,8 @@ impl World {
             .0
             .checked_add(1)
             .expect("girl why u making usize::MAX ecs_type_ids");
-        self.columns.insert(
-            ecs_type_id,
-            RefCell::new(vec![Box::new(crate::dynamic_storage::make_aligned_vec(
-                layout,
-            ))]),
-        );
+        self.columns
+            .insert(ecs_type_id, RefCell::new(DynamicColumns::new(layout)));
         ecs_type_id
     }
 
@@ -352,7 +470,7 @@ impl World {
         let column_idx = archetype.column_indices[&id];
         Some((
             entity_idx,
-            &mut *self.columns.get_mut(&id).unwrap().get_mut()[column_idx],
+            &mut self.columns.get_mut(&id).unwrap().get_mut()[column_idx],
         ))
     }
 
@@ -413,15 +531,15 @@ impl World {
             archetype: new_archetype_id,
         };
         let (old_archetype, new_archetype) =
-            get_two(&mut self.archetypes, archetype_id, new_archetype_id);
+            get_two_mut(&mut self.archetypes, archetype_id, new_archetype_id);
 
         let entity_idx = old_archetype.get_entity_idx(entity).unwrap();
         old_archetype.entities.swap_remove(entity_idx);
 
         for (column_type_id, &new_column) in new_archetype.column_indices.iter() {
             let old_column = *old_archetype.column_indices.get(column_type_id).unwrap();
-            let mut storages = RefCell::borrow_mut(self.columns.get(column_type_id).unwrap());
-            let (old_column, new_column) = get_two(&mut *storages, old_column, new_column);
+            let mut columns = RefCell::borrow_mut(&self.columns[&column_type_id]);
+            let (old_column, new_column) = columns.get_two_storages_mut(old_column, new_column);
             old_column.swap_remove_move_to(new_column, entity_idx)
         }
         new_archetype.entities.push(entity);
@@ -493,15 +611,15 @@ impl World {
             archetype: new_archetype_id,
         };
         let (old_archetype, new_archetype) =
-            get_two(&mut self.archetypes, archetype_id, new_archetype_id);
+            get_two_mut(&mut self.archetypes, archetype_id, new_archetype_id);
 
         let entity_idx = old_archetype.get_entity_idx(entity).unwrap();
         old_archetype.entities.swap_remove(entity_idx);
 
         for (column_type_id, &old_column) in old_archetype.column_indices.iter() {
             let new_column = *new_archetype.column_indices.get(column_type_id).unwrap();
-            let mut storages = RefCell::borrow_mut(self.columns.get(column_type_id).unwrap());
-            let (old_column, new_column) = get_two(&mut *storages, old_column, new_column);
+            let mut columns = RefCell::borrow_mut(&self.columns[&column_type_id]);
+            let (old_column, new_column) = columns.get_two_storages_mut(old_column, new_column);
             old_column.swap_remove_move_to(new_column, entity_idx);
         }
         new_archetype.entities.push(entity);
@@ -527,7 +645,7 @@ impl World {
     }
 }
 
-fn get_two<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
+fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;
     match idx_1.cmp(&idx_2) {
         Ordering::Less => {
@@ -546,7 +664,7 @@ fn get_two<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
 
 impl World {
     fn get_column(&self, column_idx: usize, ecs_type_id: EcsTypeId) -> cell::Ref<'_, dyn Storage> {
-        cell::Ref::map(self.columns[&ecs_type_id].borrow(), |vec| &*vec[column_idx])
+        cell::Ref::map(self.columns[&ecs_type_id].borrow(), |vec| &vec[column_idx])
     }
 
     fn get_column_mut(
@@ -555,7 +673,7 @@ impl World {
         ecs_type_id: EcsTypeId,
     ) -> cell::RefMut<'_, dyn Storage> {
         cell::RefMut::map(self.columns[&ecs_type_id].borrow_mut(), |vec| {
-            &mut *vec[column_idx]
+            &mut vec[column_idx]
         })
     }
 
@@ -587,13 +705,7 @@ impl World {
             .collect::<Vec<_>>();
 
         self.find_archetype_from_ids(&new_type_ids)
-            .unwrap_or_else(|| {
-                let new_columns = new_type_ids
-                    .iter()
-                    .map(|type_id| self.columns[type_id].borrow()[0].empty_of_same_type())
-                    .collect();
-                self.push_archetype(new_type_ids, new_columns)
-            })
+            .unwrap_or_else(|| self.push_archetype(new_type_ids))
     }
 
     fn get_or_insert_archetype_from_insert(
@@ -614,27 +726,16 @@ impl World {
             .collect::<Vec<_>>();
 
         self.find_archetype_from_ids(&new_type_ids)
-            .unwrap_or_else(|| {
-                let new_columns = new_type_ids
-                    .iter()
-                    .map(|type_id| self.columns[type_id].borrow()[0].empty_of_same_type())
-                    .collect();
-                self.push_archetype(new_type_ids, new_columns)
-            })
+            .unwrap_or_else(|| self.push_archetype(new_type_ids))
     }
 
-    fn push_archetype(
-        &mut self,
-        type_ids: Vec<EcsTypeId>,
-        storages: Vec<Box<dyn Storage>>,
-    ) -> usize {
+    fn push_archetype(&mut self, type_ids: Vec<EcsTypeId>) -> usize {
         assert!(self.find_archetype_from_ids(&type_ids).is_none());
         let column_indices = type_ids
             .into_iter()
-            .zip(storages.into_iter())
-            .map(|(type_id, storage)| {
+            .map(|type_id| {
                 let mut columns = RefCell::borrow_mut(&self.columns[&type_id]);
-                columns.push(storage);
+                columns.push_empty_column();
                 (type_id, columns.len() - 1)
             })
             .collect::<HashMap<_, _>>();

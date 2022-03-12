@@ -1,7 +1,8 @@
 use crate::{
+    dynamic_storage::ErasedBytesVec,
     errors::WorldBorrowError,
     system::Access,
-    world::{Archetype, EcsTypeId, Storage},
+    world::{Archetype, DynamicColumns, EcsTypeId, StaticColumns, Storage},
     Component, Entity, World,
 };
 use std::{
@@ -100,8 +101,8 @@ impl QueryParam for Entity {
 }
 
 impl<T: Component> QueryParam for &'static T {
-    type Lock<'a> = cell::Ref<'a, Vec<Box<dyn Storage>>>;
-    type LockBorrow<'a> = &'a [Box<dyn Storage>];
+    type Lock<'a> = cell::Ref<'a, StaticColumns<T>>;
+    type LockBorrow<'a> = &'a [Vec<T>];
     type Item<'a> = &'a T;
     type ItemIter<'a> = std::slice::Iter<'a, T>;
 
@@ -116,13 +117,14 @@ impl<T: Component> QueryParam for &'static T {
             .get(ecs_type_id)
             .map(|cell| {
                 cell.try_borrow()
+                    .map(|ok| cell::Ref::map(ok, |columns| columns.as_static::<T>()))
                     .map_err(|_| WorldBorrowError(type_name::<T>()))
             })
             .transpose()
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
-        lock.as_slice()
+        lock.0.as_slice()
     }
 
     fn archetype_matches(archetype: &Archetype, ecs_type_ids: &HashMap<TypeId, EcsTypeId>) -> bool {
@@ -158,8 +160,8 @@ impl<T: Component> QueryParam for &'static T {
 }
 
 impl<T: Component> QueryParam for &'static mut T {
-    type Lock<'a> = cell::RefMut<'a, Vec<Box<dyn Storage>>>;
-    type LockBorrow<'a> = (usize, &'a mut [Box<dyn Storage>]);
+    type Lock<'a> = cell::RefMut<'a, StaticColumns<T>>;
+    type LockBorrow<'a> = (usize, &'a mut [Vec<T>]);
     type Item<'a> = &'a mut T;
     type ItemIter<'a> = std::slice::IterMut<'a, T>;
 
@@ -174,13 +176,14 @@ impl<T: Component> QueryParam for &'static mut T {
             .get(ecs_type_id)
             .map(|cell| {
                 cell.try_borrow_mut()
+                    .map(|ok| cell::RefMut::map(ok, |columns| columns.as_static_mut::<T>()))
                     .map_err(|_| WorldBorrowError(type_name::<T>()))
             })
             .transpose()
     }
 
     fn lock_borrows_from_locks<'a, 'b>(lock: &'a mut Self::Lock<'b>) -> Self::LockBorrow<'a> {
-        (0, lock.as_mut_slice())
+        (0, lock.0.as_mut_slice())
     }
 
     fn archetype_matches(archetype: &Archetype, ecs_type_ids: &HashMap<TypeId, EcsTypeId>) -> bool {
@@ -369,13 +372,13 @@ pub enum DynQueryParamKind {
 }
 
 pub enum DynQueryParamLock<'a> {
-    Mut(cell::RefMut<'a, Vec<Box<dyn Storage>>>),
-    Ref(cell::Ref<'a, Vec<Box<dyn Storage>>>),
+    Mut(cell::RefMut<'a, DynamicColumns>),
+    Ref(cell::Ref<'a, DynamicColumns>),
 }
 
 pub enum DynQueryParamLockBorrow<'a> {
-    Mut(usize, &'a mut [Box<dyn Storage>]),
-    Ref(&'a [Box<dyn Storage>]),
+    Mut(usize, &'a mut [Box<dyn ErasedBytesVec>]),
+    Ref(&'a [Box<dyn ErasedBytesVec>]),
 }
 
 pub struct Query<'a, Q: QueryParam + 'static> {
@@ -397,11 +400,14 @@ impl<'b, Q: QueryParam> Query<'b, Q> {
         if let Some((_, dyn_locks)) = &mut self.locks {
             match param.kind {
                 DynQueryParamKind::Mut => dyn_locks.push(DynQueryParamLock::Mut(
-                    self.w.columns[&param.id].borrow_mut(),
+                    cell::RefMut::map(self.w.columns[&param.id].borrow_mut(), |columns| {
+                        columns.as_dynamic_mut()
+                    }),
                 )),
-                DynQueryParamKind::Ref => {
-                    dyn_locks.push(DynQueryParamLock::Ref(self.w.columns[&param.id].borrow()))
-                }
+                DynQueryParamKind::Ref => dyn_locks.push(DynQueryParamLock::Ref(cell::Ref::map(
+                    self.w.columns[&param.id].borrow(),
+                    |columns| columns.as_dynamic(),
+                ))),
             }
         }
 
@@ -460,9 +466,9 @@ impl<'a, 'b: 'a, Q: QueryParam> QueryIter<'a, 'b, Q> {
                         .iter_mut()
                         .map(|lock| match lock {
                             DynQueryParamLock::Mut(r) => {
-                                DynQueryParamLockBorrow::Mut(0, &mut r[..])
+                                DynQueryParamLockBorrow::Mut(0, &mut r.0[..])
                             }
-                            DynQueryParamLock::Ref(r) => DynQueryParamLockBorrow::Ref(&r[..]),
+                            DynQueryParamLock::Ref(r) => DynQueryParamLockBorrow::Ref(&r.0[..]),
                         })
                         .collect::<Vec<_>>(),
                 )
