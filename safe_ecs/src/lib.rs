@@ -11,6 +11,7 @@ mod commands;
 mod dynamic_storage;
 mod entities;
 mod scope;
+mod static_columns;
 mod world;
 
 pub use column_join::{ColumnIterator, Joinable, Maybe, WithEntities};
@@ -18,7 +19,8 @@ pub use commands::{Command, CommandBuffer, Commands, CommandsWithEntity};
 pub use entities::Entity;
 pub use safe_ecs_derive::Component;
 pub use scope::Scope;
-pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, StaticColumns, World};
+pub use static_columns::StaticColumns;
+pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, World};
 
 pub mod errors {
     #[derive(Debug, Copy, Clone)]
@@ -31,6 +33,23 @@ pub struct LtPtr<'a>(PhantomData<&'a ()>, pub *const [MaybeUninit<u8>]);
 pub struct LtPtrMut<'a>(PhantomData<&'a mut ()>, pub *mut [MaybeUninit<u8>]);
 pub struct LtPtrWriteOnly<'a>(PhantomData<&'a mut ()>, pub *mut [MaybeUninit<u8>]);
 pub struct LtPtrOwn<'a>(PhantomData<&'a ()>, pub *const [MaybeUninit<u8>]);
+
+pub(crate) fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
+    use std::cmp::Ordering;
+    match idx_1.cmp(&idx_2) {
+        Ordering::Less => {
+            let (left, right) = vec.split_at_mut(idx_2);
+            (&mut left[idx_1], &mut right[0])
+        }
+        Ordering::Greater => {
+            let (left, right) = vec.split_at_mut(idx_1);
+            (&mut right[0], &mut left[idx_2])
+        }
+        Ordering::Equal => {
+            panic!("")
+        }
+    }
+}
 
 #[cfg(test)]
 mod test_component_impls {
