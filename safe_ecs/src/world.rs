@@ -19,29 +19,10 @@ pub struct EcsTypeId(usize);
 pub trait Component: 'static {}
 
 pub trait Columns: 'static {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn push_empty_column(&self);
     fn len(&self) -> usize;
     fn swap_remove_to(&self, old_col: usize, new_col: usize, entity_idx: usize);
     fn swap_remove_drop(&self, col: usize, entity_idx: usize);
-}
-
-impl dyn Columns {
-    pub(crate) fn as_static<T: Component>(&self) -> &StaticColumns<T> {
-        self.as_any().downcast_ref().unwrap()
-    }
-    pub(crate) fn as_static_mut<T: Component>(&mut self) -> &mut StaticColumns<T> {
-        self.as_any_mut().downcast_mut().unwrap()
-    }
-
-    // FIXME reimplement dynamic queries
-    pub(crate) fn as_dynamic(&self) -> &DynamicColumns {
-        self.as_any().downcast_ref().unwrap()
-    }
-    pub(crate) fn as_dynamic_mut(&mut self) -> &mut DynamicColumns {
-        self.as_any_mut().downcast_mut().unwrap()
-    }
 }
 
 // fixme rc/refcell/ify
@@ -54,20 +35,12 @@ impl DynamicColumns {
     }
 }
 impl Columns for DynamicColumns {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
     fn push_empty_column(&self) {
         todo!()
-        // self.0.push(self.0[0].empty_of_same_layout());
     }
 
     fn len(&self) -> usize {
-        self.0.len()
+        todo!()
     }
 
     fn swap_remove_to(&self, _: usize, _: usize, _: usize) {
@@ -76,149 +49,6 @@ impl Columns for DynamicColumns {
 
     fn swap_remove_drop(&self, _: usize, _: usize) {
         todo!()
-    }
-}
-impl Index<usize> for DynamicColumns {
-    type Output = dyn Storage;
-    fn index(&self, idx: usize) -> &Self::Output {
-        let storage: &Box<dyn ErasedBytesVec> = &self.0[idx];
-        storage
-    }
-}
-impl IndexMut<usize> for DynamicColumns {
-    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
-        let storage: &mut Box<dyn ErasedBytesVec> = &mut self.0[idx];
-        storage
-    }
-}
-
-pub trait Storage: 'static {
-    fn as_typed_storage(&self) -> Option<&dyn TypedStorage>;
-    fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage>;
-
-    fn as_erased_storage(&self) -> Option<&dyn ErasedBytesVec>;
-    fn as_erased_storage_mut(&mut self) -> Option<&mut dyn ErasedBytesVec>;
-
-    fn empty_of_same_type(&self) -> Box<dyn Storage>;
-
-    fn swap_remove_move_to(&mut self, other: &mut dyn Storage, idx: usize);
-    fn swap_remove_and_drop(&mut self, idx: usize);
-
-    fn get_element_ptr(&self, idx: usize) -> LtPtr<'_>;
-    fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_>;
-}
-
-pub trait TypedStorage: 'static {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-
-impl<T: Component> Storage for Vec<T> {
-    fn as_typed_storage(&self) -> Option<&dyn TypedStorage> {
-        Some(self)
-    }
-
-    fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage> {
-        Some(self)
-    }
-
-    fn as_erased_storage(&self) -> Option<&dyn ErasedBytesVec> {
-        None
-    }
-
-    fn as_erased_storage_mut(&mut self) -> Option<&mut dyn ErasedBytesVec> {
-        None
-    }
-
-    fn empty_of_same_type(&self) -> Box<dyn Storage> {
-        Box::new(Vec::<T>::new())
-    }
-
-    fn swap_remove_move_to(&mut self, other: &mut dyn Storage, idx: usize) {
-        let other = other
-            .as_typed_storage_mut()
-            .unwrap()
-            .as_vec_mut::<T>()
-            .unwrap();
-        other.push(self.swap_remove(idx));
-    }
-
-    fn swap_remove_and_drop(&mut self, idx: usize) {
-        self.swap_remove(idx);
-    }
-
-    fn get_element_ptr(&self, idx: usize) -> LtPtr<'_> {
-        let ptr = &self[idx] as *const T as *const MaybeUninit<u8>;
-        let ptr = std::ptr::slice_from_raw_parts(ptr, std::mem::size_of::<T>());
-        LtPtr(Default::default(), ptr)
-    }
-
-    fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_> {
-        let ptr = &mut self[idx] as *mut T as *mut MaybeUninit<u8>;
-        let ptr = std::ptr::slice_from_raw_parts_mut(ptr, std::mem::size_of::<T>());
-        LtPtrMut(Default::default(), ptr)
-    }
-}
-impl<T: Component> TypedStorage for Vec<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-impl dyn TypedStorage {
-    pub(crate) fn as_vec<U: 'static>(&self) -> Option<&Vec<U>> {
-        self.as_any().downcast_ref()
-    }
-
-    pub(crate) fn as_vec_mut<U: 'static>(&mut self) -> Option<&mut Vec<U>> {
-        self.as_any_mut().downcast_mut()
-    }
-
-    pub(crate) fn push<T: 'static>(&mut self, arg: T) {
-        self.as_vec_mut().unwrap().push(arg);
-    }
-}
-
-impl Storage for Box<dyn ErasedBytesVec> {
-    fn as_typed_storage(&self) -> Option<&dyn TypedStorage> {
-        None
-    }
-
-    fn as_typed_storage_mut(&mut self) -> Option<&mut dyn TypedStorage> {
-        None
-    }
-
-    fn as_erased_storage(&self) -> Option<&dyn ErasedBytesVec> {
-        Some(&**self)
-    }
-
-    fn as_erased_storage_mut(&mut self) -> Option<&mut dyn ErasedBytesVec> {
-        Some(&mut **self)
-    }
-
-    fn empty_of_same_type(&self) -> Box<dyn Storage> {
-        Box::new(self.empty_of_same_layout())
-    }
-
-    fn swap_remove_move_to(&mut self, other: &mut dyn Storage, idx: usize) {
-        let other = other.as_erased_storage_mut().unwrap();
-        (&mut **self).swap_remove_move_to(other, idx);
-    }
-
-    fn swap_remove_and_drop(&mut self, idx: usize) {
-        (&mut **self).swap_remove(idx);
-    }
-
-    fn get_element_ptr(&self, idx: usize) -> LtPtr<'_> {
-        (&**self).get_element_ptr(idx)
-    }
-
-    fn get_element_ptr_mut(&mut self, idx: usize) -> LtPtrMut<'_> {
-        (&mut **self).get_element_ptr_mut(idx)
     }
 }
 
@@ -265,18 +95,6 @@ impl World {
         owner2
     }
 
-    pub fn new_dynamic_ecs_type_id(&mut self, layout: std::alloc::Layout) -> EcsTypeId {
-        let ecs_type_id = self.next_ecs_type_id;
-        self.next_ecs_type_id.0 = ecs_type_id
-            .0
-            .checked_add(1)
-            .expect("dont make usize::MAX ecs_type_ids ???");
-        // fixme
-        self.columns
-            .insert(ecs_type_id, DynamicColumns::new(layout));
-        ecs_type_id
-    }
-
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.entities.is_alive(entity)
     }
@@ -317,96 +135,6 @@ impl World {
         Some(self.archetypes[archetype].column_indices.get(&id).is_some())
     }
 
-    // pub fn get_component_dynamic(
-    //     &self,
-    //     entity: Entity,
-    //     id: EcsTypeId,
-    // ) -> Option<(usize, cell::Ref<dyn Storage>)> {
-    //     if self.has_component_dynamic(entity, id)? == false {
-    //         return None;
-    //     }
-
-    //     let archetype_id = self.entities.meta(entity).unwrap().archetype;
-    //     let archetype = &self.archetypes[archetype_id];
-    //     let entity_idx = archetype.get_entity_idx(entity).unwrap();
-    //     let column_idx = archetype.column_indices[&id];
-    //     Some((entity_idx, self.get_column(column_idx, id)))
-    // }
-
-    // pub fn get_component_mut_dynamic(
-    //     &self,
-    //     entity: Entity,
-    //     id: EcsTypeId,
-    // ) -> Option<(usize, cell::RefMut<dyn Storage>)> {
-    //     if self.has_component_dynamic(entity, id)? == false {
-    //         return None;
-    //     }
-
-    //     let archetype_id = self.entities.meta(entity).unwrap().archetype;
-    //     let archetype = &self.archetypes[archetype_id];
-    //     let entity_idx = archetype.get_entity_idx(entity).unwrap();
-    //     let column_idx = archetype.column_indices[&id];
-    //     Some((entity_idx, self.get_column_mut(column_idx, id)))
-    // }
-
-    // pub fn get_component_mut_dynamic_ct(
-    //     &mut self,
-    //     entity: Entity,
-    //     id: EcsTypeId,
-    // ) -> Option<(usize, &mut dyn Storage)> {
-    //     if self.has_component_dynamic(entity, id)? == false {
-    //         return None;
-    //     }
-
-    //     let archetype_id = self.entities.meta(entity).unwrap().archetype;
-    //     let archetype = &self.archetypes[archetype_id];
-    //     let entity_idx = archetype.get_entity_idx(entity).unwrap();
-    //     let column_idx = archetype.column_indices[&id];
-    //     Some((
-    //         entity_idx,
-    //         &mut self.columns.get_mut(&id).unwrap().get_mut()[column_idx],
-    //     ))
-    // }
-
-    // pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
-    //     if self.has_component::<T>(entity)? == false {
-    //         return None;
-    //     }
-    //     let ecs_type_id = self.type_to_ecs_type_id::<T>()?;
-
-    //     let (entity_idx, old_archetype) = self.move_entity_from_remove(entity, ecs_type_id)?;
-    //     let column_idx = *old_archetype.column_indices.get(&ecs_type_id).unwrap();
-    //     Some(
-    //         self.columns.get_mut(&ecs_type_id).unwrap().get_mut()[column_idx]
-    //             .as_typed_storage_mut()
-    //             .unwrap()
-    //             .as_vec_mut::<T>()
-    //             .unwrap()
-    //             .swap_remove(entity_idx),
-    //     )
-    // }
-
-    // pub fn remove_component_dynamic(
-    //     &mut self,
-    //     entity: Entity,
-    //     id: EcsTypeId,
-    // ) -> Option<LtPtrOwn<'_>> {
-    //     if self.has_component_dynamic(entity, id)? == false {
-    //         return None;
-    //     }
-
-    //     let (entity_idx, old_archetype) = self.move_entity_from_remove(entity, id)?;
-
-    //     let column_idx = *old_archetype.column_indices.get(&id).unwrap();
-    //     Some(
-    //         self.columns.get_mut(&id).unwrap().get_mut()[column_idx]
-    //             .as_erased_storage_mut()
-    //             .unwrap()
-    //             .swap_remove(entity_idx)
-    //             .unwrap(),
-    //     )
-    // }
-
     /// Moves an entity between archetypes and all its components to new columns
     /// from a `remove` operation. Caller should handle actually removing data
     /// of `removed_id` from the column of the old archetype
@@ -440,53 +168,6 @@ impl World {
         new_archetype.entities.push(entity);
         Some((entity_idx, old_archetype))
     }
-
-    // pub fn insert_component<T: Component>(&mut self, entity: Entity, component: T) -> Option<T> {
-    //     let ecs_type_id = self.type_to_ecs_type_id_or_create::<T>();
-    //     if let Some(mut old_component) = self.get_component_mut::<T>(entity) {
-    //         return Some(std::mem::replace(&mut *old_component, component));
-    //     }
-
-    //     let new_archetype = self.move_entity_from_insert(entity, ecs_type_id)?;
-
-    //     let column_idx = *new_archetype.column_indices.get(&ecs_type_id).unwrap();
-    //     self.columns.get_mut(&ecs_type_id).unwrap().get_mut()[column_idx]
-    //         .as_typed_storage_mut()
-    //         .unwrap()
-    //         .push(component);
-    //     None
-    // }
-
-    // pub fn insert_component_dynamic(
-    //     &mut self,
-    //     entity: Entity,
-    //     id: EcsTypeId,
-    //     write_fn: impl for<'a> FnOnce(LtPtrWriteOnly<'a>),
-    // ) -> Option<LtPtrOwn<'_>> {
-    //     // no `if let` bcos borrowck is bad, gimme polonius >:(
-    //     if self.get_component_mut_dynamic_ct(entity, id).is_some() {
-    //         let (entity_idx, storage) = self.get_component_mut_dynamic_ct(entity, id).unwrap();
-    //         let storage = storage.as_erased_storage_mut().unwrap();
-    //         let (inserted_over, uninit_idx) = storage.copy_to_insert_over_space(entity_idx);
-    //         write_fn(uninit_idx);
-    //         return Some(inserted_over);
-    //     }
-
-    //     let new_archetype = self.move_entity_from_insert(entity, id)?;
-
-    //     let column_idx = *new_archetype.column_indices.get(&id).unwrap();
-
-    //     let mut column = self.get_column_mut(column_idx, id);
-    //     let erased_storage = column.as_erased_storage_mut().unwrap();
-    //     let num_elements = erased_storage.num_elements();
-    //     erased_storage.realloc_if_full();
-    //     write_fn(LtPtrWriteOnly(
-    //         Default::default(),
-    //         erased_storage.get_element_ptr_mut(num_elements).1,
-    //     ));
-    //     erased_storage.incr_len();
-    //     None
-    // }
 
     /// Moves an entity between archetypes and all its components to new columns
     /// from an `insert` operation. Caller should handle actually inserting data
@@ -530,20 +211,6 @@ impl World {
 }
 
 impl World {
-    // fn get_column(&self, column_idx: usize, ecs_type_id: EcsTypeId) -> cell::Ref<'_, dyn Storage> {
-    //     cell::Ref::map(self.columns[&ecs_type_id].borrow(), |vec| &vec[column_idx])
-    // }
-
-    // fn get_column_mut(
-    //     &self,
-    //     column_idx: usize,
-    //     ecs_type_id: EcsTypeId,
-    // ) -> cell::RefMut<'_, dyn Storage> {
-    //     cell::RefMut::map(self.columns[&ecs_type_id].borrow_mut(), |vec| {
-    //         &mut vec[column_idx]
-    //     })
-    // }
-
     fn find_archetype_from_ids(&self, ids: &[EcsTypeId]) -> Option<usize> {
         self.archetypes.iter().position(|archetype| {
             (archetype.column_indices.len() == ids.len())
@@ -640,7 +307,7 @@ impl<'a> EntityBuilder<'a> {
     }
 }
 
-#[cfg(testa)]
+#[cfg(old_tests)]
 mod dynamic_tests {
     use super::*;
     use std::alloc::Layout;

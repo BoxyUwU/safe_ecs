@@ -4,10 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::{
-    world::{Columns, Storage},
-    Component, EcsTypeId, Entity, World,
-};
+use crate::{world::Columns, Component, EcsTypeId, Entity, World};
 
 pub struct StaticColumnsInner<T>(pub(crate) Vec<Vec<T>>);
 impl<T> StaticColumnsInner<T> {
@@ -107,13 +104,6 @@ impl<T: Component> StaticColumns<T> {
 }
 
 impl<T: Component> Columns for StaticColumns<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
     fn push_empty_column(&self) {
         self.inner.borrow_mut().0.push(vec![]);
     }
@@ -125,7 +115,7 @@ impl<T: Component> Columns for StaticColumns<T> {
     fn swap_remove_to(&self, old_col: usize, new_col: usize, entity_idx: usize) {
         let cols = &mut self.inner.borrow_mut().0[..];
         let (old_col, end_col) = crate::get_two_mut(cols, old_col, new_col);
-        old_col.swap_remove_move_to(end_col, entity_idx);
+        end_col.push(old_col.swap_remove(entity_idx));
     }
 
     fn swap_remove_drop(&self, col: usize, entity_idx: usize) {
