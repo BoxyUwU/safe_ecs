@@ -70,11 +70,11 @@ impl Columns for DynamicColumns {
         self.0.len()
     }
 
-    fn swap_remove_to(&self, old_col: usize, new_col: usize, entity_idx: usize) {
+    fn swap_remove_to(&self, _: usize, _: usize, _: usize) {
         todo!()
     }
 
-    fn swap_remove_drop(&self, col: usize, entity_idx: usize) {
+    fn swap_remove_drop(&self, _: usize, _: usize) {
         todo!()
     }
 }
@@ -621,7 +621,7 @@ pub struct EntityBuilder<'a> {
 }
 
 impl<'a> EntityBuilder<'a> {
-    pub fn insert<T: Component>(&mut self, component: T) -> &mut Self {
+    pub fn insert<T: Component>(&mut self, _: T) -> &mut Self {
         todo!();
         // self.world.insert_component(self.entity, component);
         self

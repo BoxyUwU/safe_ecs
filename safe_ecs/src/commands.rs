@@ -8,14 +8,14 @@ pub trait Command: 'static {
 
 struct RemoveCmd<T: Component>(Entity, PhantomData<T>);
 impl<T: Component> Command for RemoveCmd<T> {
-    fn apply(self: Box<Self>, world: &mut World) {
+    fn apply(self: Box<Self>, _: &mut World) {
         todo!()
         // world.remove_component::<T>(self.0);
     }
 }
 struct InsertCmd<T: Component>(Entity, T);
 impl<T: Component> Command for InsertCmd<T> {
-    fn apply(self: Box<Self>, world: &mut World) {
+    fn apply(self: Box<Self>, _: &mut World) {
         todo!()
         // world.insert_component(self.0, self.1);
     }
