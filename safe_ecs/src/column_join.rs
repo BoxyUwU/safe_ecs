@@ -520,60 +520,88 @@ tuple_impls_joinable!(A B C);
 tuple_impls_joinable!(A B);
 tuple_impls_joinable!(A);
 
-#[test]
-fn foo() {
-    let mut world = World::new();
-    #[derive(Debug, Component, Eq, PartialEq)]
-    struct Foo(u32);
-    let mut u32s = world.new_static_column::<Foo>();
-    let e1 = world.spawn().id();
-    u32s.insert_component(&mut world, e1, Foo(12_u32));
-    let mut locks = ColumnLocks::new(&u32s, &world);
-    for _ in &mut locks {}
-    let mut iter = ColumnIterator::new(&mut locks);
-    assert_eq!(iter.next().unwrap(), &Foo(12_u32));
-    assert_eq!(iter.next(), None);
-}
-
-#[cfg(testa)]
+#[cfg(test)]
 mod static_tests {
     use crate::*;
 
     #[test]
+    fn for_loop() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let e1 = world.spawn().insert(&mut u32s, 10).id();
+        for data in ColumnLocks::new((WithEntities, &u32s), &world).into_iter() {
+            assert_eq!(data, (e1, &10));
+            return;
+        }
+        unreachable!()
+    }
+
+    #[test]
     fn simple_query() {
         let mut world = World::new();
-        world.spawn().insert(10_u32).insert(12_u64).id();
-        world.spawn().insert(13_u64).insert(9_u128).id();
-        let q = &*world.borrow::<u64>().unwrap();
-        let returned = ColumnIterator::new(q, &world).collect::<Vec<_>>();
-        assert_eq!(returned.as_slice(), &[&12, &13]);
+        let mut u32s = world.new_static_column::<u32>();
+        let mut u64s = world.new_static_column::<u64>();
+        let mut u128s = world.new_static_column::<u128>();
+        world
+            .spawn()
+            .insert(&mut u32s, 10_u32)
+            .insert(&mut u64s, 12_u64)
+            .id();
+        world
+            .spawn()
+            .insert(&mut u64s, 13_u64)
+            .insert(&mut u128s, 9_u128)
+            .id();
+        let mut locks = ColumnLocks::new(&u64s, &world);
+        let returned = locks.into_iter().collect::<Vec<_>>();
+        assert_eq!(returned, [&12, &13]);
     }
 
     #[test]
     fn tuple_query() {
         let mut world = World::new();
-        let e1 = world.spawn().insert(10_u32).insert(12_u64).id();
-        world.spawn().insert(13_u64).insert(9_u128).id();
-        let u32s = &*world.borrow::<u32>().unwrap();
-        let u64s = &*world.borrow::<u64>().unwrap();
-        let returned = ColumnIterator::new((WithEntities, u32s, u64s), &world).collect::<Vec<_>>();
-        assert_eq!(returned.as_slice(), &[(e1, &10, &12)]);
+        let mut u32s = world.new_static_column::<u32>();
+        let mut u64s = world.new_static_column::<u64>();
+        let mut u128s = world.new_static_column::<u128>();
+        let e1 = world
+            .spawn()
+            .insert(&mut u32s, 10_u32)
+            .insert(&mut u64s, 12_u64)
+            .id();
+        world
+            .spawn()
+            .insert(&mut u64s, 13_u64)
+            .insert(&mut u128s, 9_u128)
+            .id();
+        let mut locks = ColumnLocks::new((WithEntities, &u32s, &u64s), &world);
+        let returned = locks.into_iter().collect::<Vec<_>>();
+        assert_eq!(returned, [(e1, &10, &12)]);
     }
 
     #[test]
     fn maybe_query() {
         let mut world = World::new();
-        let e1 = world.spawn().insert(10_u32).insert(12_u64).id();
-        let e2 = world.spawn().insert(13_u64).insert(9_u128).id();
+        let mut u32s = world.new_static_column::<u32>();
+        let mut u64s = world.new_static_column::<u64>();
+        let mut u128s = world.new_static_column::<u128>();
 
-        let u32s = &*world.borrow::<u32>().unwrap();
-        let u64s = &*world.borrow::<u64>().unwrap();
-        let u128s = &*world.borrow::<u128>().unwrap();
-        let returned = ColumnIterator::new((WithEntities, Maybe(u32s), u64s, Maybe(u128s)), &world)
-            .collect::<Vec<_>>();
+        let e1 = world
+            .spawn()
+            .insert(&mut u32s, 10_u32)
+            .insert(&mut u64s, 12_u64)
+            .id();
+        let e2 = world
+            .spawn()
+            .insert(&mut u64s, 13_u64)
+            .insert(&mut u128s, 9_u128)
+            .id();
+
+        let mut locks =
+            ColumnLocks::new((WithEntities, Maybe(&u32s), &u64s, Maybe(&u128s)), &world);
+        let returned = locks.into_iter().collect::<Vec<_>>();
         assert_eq!(
-            returned.as_slice(),
-            &[
+            returned,
+            [
                 (e1, Some(&10_u32), &12_u64, None),
                 (e2, None, &13_u64, Some(&9_u128))
             ],
@@ -583,38 +611,24 @@ mod static_tests {
     #[test]
     fn query_with_despawned() {
         let mut world = World::new();
-        let e1 = world.spawn().insert(10_u32).id();
+        let mut u32s = world.new_static_column::<u32>();
+        let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
         world.despawn(e1);
 
-        let q = &*world.borrow::<u32>().unwrap();
-        let mut iter = ColumnIterator::new(q, &world);
+        let mut locks = ColumnLocks::new(&u32s, &world);
+        let mut iter = locks.into_iter();
         assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn conflicting_queries() {
-        let mut world = World::new();
-        let _e1 = world.spawn().insert(10_u32).insert(10_u64).id();
-
-        let _q1 = world.borrow::<u32>().unwrap();
-        assert!(matches!(world.borrow_mut::<u32>(), Err(_)));
-
-        let _q2 = world.borrow_mut::<u64>().unwrap();
-        world.borrow::<u32>().unwrap();
-        assert!(matches!(world.borrow_mut::<u64>(), Err(_)));
     }
 
     #[test]
     fn complex_maybe_query() {
         let mut world = World::new();
-        world.new_static_ecs_type_id::<u64>();
-        let e1 = world.spawn().insert(10_u32).id();
-        let e2 = world.spawn().insert(12_u32).id();
-        let u32s = &*world.borrow::<u32>().unwrap();
-        let u64s = &*world.borrow::<u64>().unwrap();
-        let mut iter = ColumnIterator::new((WithEntities, Maybe(u64s), u32s), &world);
-        assert_eq!(iter.next(), Some((e1, None, &10_u32)));
-        assert_eq!(iter.next(), Some((e2, None, &12_u32)));
-        assert_eq!(iter.next(), None);
+        let mut u32s = world.new_static_column::<u32>();
+        let u64s = world.new_static_column::<u64>();
+        let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
+        let e2 = world.spawn().insert(&mut u32s, 12_u32).id();
+        let mut locks = ColumnLocks::new((WithEntities, Maybe(&u64s), &u32s), &world);
+        let returned = locks.into_iter().collect::<Vec<_>>();
+        assert_eq!(returned, [(e1, None, &10_u32), (e2, None, &12_u32)]);
     }
 }

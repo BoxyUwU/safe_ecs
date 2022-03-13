@@ -621,15 +621,17 @@ pub struct EntityBuilder<'a> {
 }
 
 impl<'a> EntityBuilder<'a> {
-    pub fn insert<T: Component>(&mut self, _: T) -> &mut Self {
-        todo!();
-        // self.world.insert_component(self.entity, component);
+    pub fn insert<T: Component>(
+        &mut self,
+        storage: &mut StaticColumns<T>,
+        component: T,
+    ) -> &mut Self {
+        storage.insert_component(self.world, self.entity, component);
         self
     }
 
-    pub fn remove<T: Component>(&mut self) -> &mut Self {
-        todo!();
-        // self.world.remove_component::<T>(self.entity);
+    pub fn remove<T: Component>(&mut self, storage: &mut StaticColumns<T>) -> &mut Self {
+        storage.remove_component(self.world, self.entity);
         self
     }
 

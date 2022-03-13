@@ -15,7 +15,7 @@ mod scope;
 mod static_columns;
 mod world;
 
-pub use column_join::{ColumnIterator, Joinable /* Maybe, WithEntities */};
+pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, WithEntities};
 pub use commands::{Command, CommandBuffer, Commands, CommandsWithEntity};
 pub use entities::Entity;
 pub use safe_ecs_derive::Component;
