@@ -10,7 +10,7 @@ use std::{
 use crate::{
     dynamic_storage::ErasedBytesVec,
     entities::{Entities, Entity, EntityMeta},
-    errors, CommandBuffer, Commands, LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly, StaticColumns,
+    errors, LtPtr, LtPtrMut, LtPtrOwn, LtPtrWriteOnly, StaticColumns,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
@@ -199,14 +199,6 @@ impl World {
         }
         new_archetype.entities.push(entity);
         Some(new_archetype)
-    }
-
-    pub fn command_scope<R>(&mut self, f: impl FnOnce(Commands<'_>) -> R) -> R {
-        let mut buffer = CommandBuffer::new();
-        let commands = Commands(&mut buffer, self);
-        let r = f(commands);
-        buffer.apply(self);
-        r
     }
 }
 

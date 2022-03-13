@@ -11,15 +11,13 @@ mod column_join;
 mod commands;
 mod dynamic_storage;
 mod entities;
-mod scope;
 mod static_columns;
 mod world;
 
 pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, WithEntities};
-pub use commands::{Command, CommandBuffer, Commands, CommandsWithEntity};
+pub use commands::{command_scope, AddRemover, Commands, EntityBoundAddRemover};
 pub use entities::Entity;
 pub use safe_ecs_derive::Component;
-pub use scope::Scope;
 pub use static_columns::StaticColumns;
 pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, World};
 
