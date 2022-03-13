@@ -97,7 +97,7 @@ impl<T: Component> StaticColumns<T> {
 
     /// same as `insert_component`
     pub fn remove_component(&mut self, world: &mut World, entity: Entity) -> Option<T> {
-        if self.has_component(&*world, entity) {
+        if self.has_component(&*world, entity) == false {
             return None;
         }
         let (entity_idx, old_archetype) = world.move_entity_from_remove(entity, self.id)?;
@@ -131,5 +131,117 @@ impl<T: Component> Columns for StaticColumns<T> {
     fn swap_remove_drop(&self, col: usize, entity_idx: usize) {
         let col = &mut self.inner.borrow_mut().0[col];
         col.swap_remove(entity_idx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    trait UnwrapNone {
+        fn unwrap_none(self);
+    }
+
+    impl<T> UnwrapNone for Option<T> {
+        fn unwrap_none(self) {
+            match self {
+                Some(_) => panic!("expected `None` found `Some(_)`"),
+                None => (),
+            }
+        }
+    }
+
+    #[test]
+    fn has_component() {
+        let mut world = World::new();
+        let u32s = world.new_static_column::<u32>();
+        let e = world.spawn().id();
+        assert_eq!(u32s.has_component(&world, e), false);
+    }
+
+    #[test]
+    fn basic_insert() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let e = world.spawn().id();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        assert_eq!(*u32s.get_component(&world, e).unwrap(), 10_u32);
+    }
+
+    #[test]
+    fn insert_overwrite() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let e = world.spawn().id();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        assert_eq!(
+            u32s.insert_component(&mut world, e, 12_u32).unwrap(),
+            10_u32
+        );
+        assert_eq!(*u32s.get_component(&world, e).unwrap(), 12_u32);
+    }
+
+    #[test]
+    fn insert_archetype_change() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let mut u64s = world.new_static_column::<u64>();
+        let e = world.spawn().id();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        u64s.insert_component(&mut world, e, 12_u64).unwrap_none();
+        assert_eq!(
+            u32s.insert_component(&mut world, e, 15_u32).unwrap(),
+            10_u32
+        );
+        assert_eq!(*u32s.get_component(&world, e).unwrap(), 15_u32);
+        assert_eq!(*u64s.get_component(&world, e).unwrap(), 12_u64);
+    }
+
+    #[test]
+    fn insert_on_dead() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let e = world.spawn().id();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        world.despawn(e);
+        u32s.insert_component(&mut world, e, 12_u32).unwrap_none();
+    }
+
+    #[test]
+    fn basic_remove() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let e = world.spawn().id();
+        u32s.remove_component(&mut world, e).unwrap_none();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        assert_eq!(u32s.remove_component(&mut world, e).unwrap(), 10_u32);
+        u32s.remove_component(&mut world, e).unwrap_none();
+    }
+
+    #[test]
+    fn remove_archetype_change() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let mut u64s = world.new_static_column::<u64>();
+        let e = world.spawn().id();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        u64s.insert_component(&mut world, e, 12_u64).unwrap_none();
+        assert_eq!(
+            u32s.insert_component(&mut world, e, 15_u32).unwrap(),
+            10_u32
+        );
+        u64s.remove_component(&mut world, e);
+        assert_eq!(*u32s.get_component(&world, e).unwrap(), 15_u32);
+        assert_eq!(u64s.has_component(&world, e), false);
+    }
+
+    #[test]
+    fn remove_on_dead() {
+        let mut world = World::new();
+        let mut u32s = world.new_static_column::<u32>();
+        let e = world.spawn().id();
+        u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
+        world.despawn(e);
+        u32s.remove_component(&mut world, e).unwrap_none();
     }
 }
