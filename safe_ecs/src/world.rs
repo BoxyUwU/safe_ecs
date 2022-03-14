@@ -1,9 +1,6 @@
-use std::{
-    alloc::Layout, cell::RefCell, collections::HashMap, rc::Weak, sync::atomic::AtomicUsize,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Weak, sync::atomic::AtomicUsize};
 
 use crate::{
-    dynamic_storage::ErasedBytesVec,
     entities::{Entities, Entity, EntityMeta},
     StaticColumns,
 };
@@ -18,33 +15,6 @@ pub trait Columns {
     fn len(&self) -> usize;
     fn swap_remove_to(&mut self, old_col: usize, new_col: usize, entity_idx: usize);
     fn swap_remove_drop(&mut self, col: usize, entity_idx: usize);
-}
-
-// fixme rc/refcell/ify
-pub struct DynamicColumns(pub(crate) Vec<Box<dyn ErasedBytesVec>>);
-impl DynamicColumns {
-    pub fn new(layout: Layout) -> Box<dyn Columns> {
-        Box::new(DynamicColumns(vec![
-            crate::dynamic_storage::make_aligned_vec(layout),
-        ]))
-    }
-}
-impl Columns for DynamicColumns {
-    fn push_empty_column(&mut self) {
-        todo!()
-    }
-
-    fn len(&self) -> usize {
-        todo!()
-    }
-
-    fn swap_remove_to(&mut self, _: usize, _: usize, _: usize) {
-        todo!()
-    }
-
-    fn swap_remove_drop(&mut self, _: usize, _: usize) {
-        todo!()
-    }
 }
 
 #[derive(Debug)]

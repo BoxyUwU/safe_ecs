@@ -7,7 +7,6 @@
 )]
 
 mod column_join;
-mod dynamic_storage;
 mod entities;
 mod static_columns;
 mod world;
@@ -16,19 +15,12 @@ pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, Unsatisfied,
 pub use entities::Entity;
 pub use safe_ecs_derive::Component;
 pub use static_columns::StaticColumns;
-pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, World, WorldId};
+pub use world::{Component, EcsTypeId, EntityBuilder, World, WorldId};
 
 pub mod errors {
     #[derive(Debug, Copy, Clone)]
     pub struct WorldBorrowError(pub &'static str);
 }
-
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-pub struct LtPtr<'a>(PhantomData<&'a ()>, pub *const [MaybeUninit<u8>]);
-pub struct LtPtrMut<'a>(PhantomData<&'a mut ()>, pub *mut [MaybeUninit<u8>]);
-pub struct LtPtrWriteOnly<'a>(PhantomData<&'a mut ()>, pub *mut [MaybeUninit<u8>]);
-pub struct LtPtrOwn<'a>(PhantomData<&'a ()>, pub *const [MaybeUninit<u8>]);
 
 pub(crate) fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;
