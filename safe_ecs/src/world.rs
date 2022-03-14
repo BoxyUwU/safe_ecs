@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     mem::MaybeUninit,
     ops::{Index, IndexMut},
+    rc::Weak,
 };
 
 use crate::{
@@ -19,10 +20,10 @@ pub struct EcsTypeId(usize);
 pub trait Component {}
 
 pub trait Columns {
-    fn push_empty_column(&self);
+    fn push_empty_column(&mut self);
     fn len(&self) -> usize;
-    fn swap_remove_to(&self, old_col: usize, new_col: usize, entity_idx: usize);
-    fn swap_remove_drop(&self, col: usize, entity_idx: usize);
+    fn swap_remove_to(&mut self, old_col: usize, new_col: usize, entity_idx: usize);
+    fn swap_remove_drop(&mut self, col: usize, entity_idx: usize);
 }
 
 // fixme rc/refcell/ify
@@ -35,7 +36,7 @@ impl DynamicColumns {
     }
 }
 impl Columns for DynamicColumns {
-    fn push_empty_column(&self) {
+    fn push_empty_column(&mut self) {
         todo!()
     }
 
@@ -43,11 +44,11 @@ impl Columns for DynamicColumns {
         todo!()
     }
 
-    fn swap_remove_to(&self, _: usize, _: usize, _: usize) {
+    fn swap_remove_to(&mut self, _: usize, _: usize, _: usize) {
         todo!()
     }
 
-    fn swap_remove_drop(&self, _: usize, _: usize) {
+    fn swap_remove_drop(&mut self, _: usize, _: usize) {
         todo!()
     }
 }
@@ -64,10 +65,10 @@ impl Archetype {
     }
 }
 
-pub struct World<'a> {
+pub struct World<'data> {
     pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
-    pub(crate) columns: HashMap<EcsTypeId, Box<dyn Columns + 'a>>,
+    pub(crate) columns: HashMap<EcsTypeId, Weak<RefCell<dyn Columns + 'data>>>,
     next_ecs_type_id: EcsTypeId,
 }
 
@@ -90,9 +91,9 @@ impl<'a> World<'a> {
             .0
             .checked_add(1)
             .expect("dont make usize::MAX ecs_type_ids ???");
-        let (owner1, owner2) = StaticColumns::<T>::new(ecs_type_id);
-        self.columns.insert(ecs_type_id, Box::new(owner1));
-        owner2
+        let (column, weak) = StaticColumns::<T>::new(ecs_type_id);
+        self.columns.insert(ecs_type_id, weak);
+        column
     }
 
     pub fn is_alive(&self, entity: Entity) -> bool {
@@ -125,7 +126,9 @@ impl<'a> World<'a> {
                 archetype.entities.swap_remove(entity_idx);
 
                 for (ty_id, &column_idx) in archetype.column_indices.iter() {
-                    self.columns[ty_id].swap_remove_drop(column_idx, entity_idx);
+                    self.columns[ty_id]
+                        .upgrade()
+                        .map(|data| data.borrow_mut().swap_remove_drop(column_idx, entity_idx));
                 }
             });
     }
@@ -161,9 +164,10 @@ impl<'a> World<'a> {
         for (column_type_id, &new_column) in new_archetype.column_indices.iter() {
             let old_column = *old_archetype.column_indices.get(column_type_id).unwrap();
             let columns = &self.columns[&column_type_id];
-            columns.swap_remove_to(old_column, new_column, entity_idx);
-            // let (old_column, new_column) = columns.get_two_storages_mut(old_column, new_column);
-            // old_column.swap_remove_move_to(new_column, entity_idx)
+            columns.upgrade().map(|data| {
+                data.borrow_mut()
+                    .swap_remove_to(old_column, new_column, entity_idx)
+            });
         }
         new_archetype.entities.push(entity);
         Some((entity_idx, old_archetype))
@@ -195,7 +199,10 @@ impl<'a> World<'a> {
         for (column_type_id, &old_column) in old_archetype.column_indices.iter() {
             let new_column = *new_archetype.column_indices.get(column_type_id).unwrap();
             let columns = &self.columns[&column_type_id];
-            columns.swap_remove_to(old_column, new_column, entity_idx)
+            columns.upgrade().map(|data| {
+                data.borrow_mut()
+                    .swap_remove_to(old_column, new_column, entity_idx)
+            });
         }
         new_archetype.entities.push(entity);
         Some(new_archetype)
@@ -259,10 +266,13 @@ impl<'a> World<'a> {
         assert!(self.find_archetype_from_ids(&type_ids).is_none());
         let column_indices = type_ids
             .into_iter()
-            .map(|type_id| {
-                let columns = &self.columns[&type_id];
-                columns.push_empty_column();
-                (type_id, columns.len() - 1)
+            .map(|type_id| match self.columns[&type_id].upgrade() {
+                None => (type_id, 0),
+                Some(columns) => {
+                    let mut columns = columns.borrow_mut();
+                    columns.push_empty_column();
+                    (type_id, columns.len() - 1)
+                }
             })
             .collect::<HashMap<_, _>>();
         self.archetypes.push(Archetype {
@@ -296,26 +306,6 @@ impl<'a, 'b> EntityBuilder<'a, 'b> {
 
     pub fn id(&self) -> Entity {
         self.entity
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::*;
-
-    #[test]
-    fn non_static() {
-        let a = 10;
-        let b = &a;
-        let mut world = World::new();
-        let mut u32borrows = world.new_static_column::<&u32>();
-        let e1 = world.spawn().insert(&mut u32borrows, b).id();
-        for (entity, data) in &mut ColumnLocks::new((WithEntities, &u32borrows), &world) {
-            assert_eq!(entity, e1);
-            assert_eq!(*data, b);
-            return;
-        }
-        unreachable!()
     }
 }
 

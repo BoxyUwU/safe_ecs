@@ -1,7 +1,7 @@
 use std::{
     any::Any,
     cell::{Ref, RefCell, RefMut},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use crate::{world::Columns, Component, EcsTypeId, Entity, World};
@@ -17,18 +17,13 @@ pub struct StaticColumns<T> {
     pub(crate) id: EcsTypeId,
 }
 impl<T: Component> StaticColumns<T> {
-    pub fn new(id: EcsTypeId) -> (Self, Self) {
+    pub fn new(id: EcsTypeId) -> (Self, Weak<RefCell<StaticColumnsInner<T>>>) {
         let columns = StaticColumns::<T> {
             inner: StaticColumnsInner::new(),
             id,
         };
-        (
-            StaticColumns {
-                inner: columns.inner.clone(),
-                id: columns.id,
-            },
-            columns,
-        )
+        let weak_ref = Rc::downgrade(&columns.inner);
+        (columns, weak_ref)
     }
 }
 
@@ -103,30 +98,30 @@ impl<T: Component> StaticColumns<T> {
     }
 }
 
-impl<T: Component> Columns for StaticColumns<T> {
-    fn push_empty_column(&self) {
-        self.inner.borrow_mut().0.push(vec![]);
+impl<T: Component> Columns for StaticColumnsInner<T> {
+    fn push_empty_column(&mut self) {
+        self.0.push(vec![]);
     }
 
     fn len(&self) -> usize {
-        self.inner.borrow().0.len()
+        self.0.len()
     }
 
-    fn swap_remove_to(&self, old_col: usize, new_col: usize, entity_idx: usize) {
-        let cols = &mut self.inner.borrow_mut().0[..];
+    fn swap_remove_to(&mut self, old_col: usize, new_col: usize, entity_idx: usize) {
+        let cols = &mut self.0[..];
         let (old_col, end_col) = crate::get_two_mut(cols, old_col, new_col);
         end_col.push(old_col.swap_remove(entity_idx));
     }
 
-    fn swap_remove_drop(&self, col: usize, entity_idx: usize) {
-        let col = &mut self.inner.borrow_mut().0[col];
+    fn swap_remove_drop(&mut self, col: usize, entity_idx: usize) {
+        let col = &mut self.0[col];
         col.swap_remove(entity_idx);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::*;
 
     trait UnwrapNone {
         fn unwrap_none(self);
@@ -233,5 +228,39 @@ mod tests {
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         world.despawn(e);
         u32s.remove_component(&mut world, e).unwrap_none();
+    }
+
+    #[test]
+    fn non_static() {
+        let a = 10;
+        let b = &a;
+        let mut world = World::new();
+        let mut u32borrows = world.new_static_column::<&u32>();
+        let e1 = world.spawn().insert(&mut u32borrows, b).id();
+        for (entity, data) in &mut ColumnLocks::new((WithEntities, &u32borrows), &world) {
+            assert_eq!(entity, e1);
+            assert_eq!(*data, b);
+            return;
+        }
+        unreachable!()
+    }
+
+    #[test]
+    fn drop_called() {
+        #[derive(Component)]
+        struct Foo<'a>(&'a mut u32);
+        impl Drop for Foo<'_> {
+            fn drop(&mut self) {
+                *self.0 = 12;
+            }
+        }
+
+        let mut a = 10;
+        let b = Foo(&mut a);
+        let mut world = World::new();
+        let mut u32borrows = world.new_static_column::<Foo<'_>>();
+        world.spawn().insert(&mut u32borrows, b);
+        drop(u32borrows);
+        assert_eq!(a, 12);
     }
 }
