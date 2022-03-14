@@ -12,11 +12,11 @@ mod entities;
 mod static_columns;
 mod world;
 
-pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, WithEntities};
+pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use entities::Entity;
 pub use safe_ecs_derive::Component;
 pub use static_columns::StaticColumns;
-pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, World};
+pub use world::{Component, DynamicColumns, EcsTypeId, EntityBuilder, World, WorldId};
 
 pub mod errors {
     #[derive(Debug, Copy, Clone)]

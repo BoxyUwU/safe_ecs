@@ -2,8 +2,8 @@ use std::cell::{Ref, RefMut};
 
 use crate::static_columns::StaticColumnsInner;
 use crate::world::Archetype;
-use crate::StaticColumns;
 use crate::{Component, EcsTypeId, Entity, World};
+use crate::{StaticColumns, WorldId};
 
 pub struct ColumnIterator<'lock, 'world: 'lock, C: Joinable + 'lock> {
     archetype_iter: ArchetypeIter<'world, 'lock, C>,
@@ -21,6 +21,7 @@ type ArchetypeIter<'world: 'lock, 'lock, C: Joinable + 'lock> =
     impl Iterator<Item = &'world Archetype> + 'lock;
 impl<'world_data, 'world, C: Joinable + 'world> ColumnLocks<'world_data, 'world, C> {
     pub fn new(borrows: C, world: &'world World<'world_data>) -> Self {
+        C::assert_world_id(&borrows, world.id);
         let ids = C::make_ids(&borrows, world);
         let locks = C::make_locks(borrows, world);
         Self { ids, locks, world }
@@ -119,6 +120,7 @@ pub trait Joinable {
     fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world;
+    fn assert_world_id(&self, world_id: WorldId);
 }
 
 impl<'a, T: Component> Joinable for &'a StaticColumns<T> {
@@ -182,6 +184,10 @@ impl<'a, T: Component> Joinable for &'a StaticColumns<T> {
         Self: 'world,
     {
         iter.next()
+    }
+
+    fn assert_world_id(&self, world_id: WorldId) {
+        (**self).assert_world_id(world_id);
     }
 }
 
@@ -252,6 +258,10 @@ impl<'a, T: Component> Joinable for &'a mut StaticColumns<T> {
         *num_chopped_off += chopped_of.len();
         chopped_of.last_mut().unwrap().iter_mut()
     }
+
+    fn assert_world_id(&self, world_id: WorldId) {
+        (**self).assert_world_id(world_id);
+    }
 }
 
 pub struct WithEntities;
@@ -312,6 +322,8 @@ impl Joinable for WithEntities {
     {
         iter.next().copied()
     }
+
+    fn assert_world_id(&self, _: WorldId) {}
 }
 
 pub struct Maybe<J: Joinable>(pub J);
@@ -384,9 +396,13 @@ impl<J: Joinable> Joinable for Maybe<J> {
             Either::U(u) => u.next().map(|_| None),
         }
     }
+
+    fn assert_world_id(&self, world_id: WorldId) {
+        J::assert_world_id(&self.0, world_id)
+    }
 }
 
-pub struct Unsatisfied<J: Joinable>(J);
+pub struct Unsatisfied<J: Joinable>(pub J);
 impl<J: Joinable> Joinable for Unsatisfied<J> {
     type Ids = J::Ids;
 
@@ -447,6 +463,10 @@ impl<J: Joinable> Joinable for Unsatisfied<J> {
         Self: 'world,
     {
         iter.next().map(|_| ())
+    }
+
+    fn assert_world_id(&self, world_id: WorldId) {
+        J::assert_world_id(&self.0, world_id)
     }
 }
 
@@ -509,6 +529,10 @@ macro_rules! tuple_impls_joinable {
                     let ($($T,)*) = iter;
                     Some(($($T::advance_iter($T)?,)*))
                 }
+            fn assert_world_id(&self, world_id: WorldId) {
+                let ($($T,)*) = self;
+                $($T::assert_world_id($T, world_id);)*
+            }
         }
     };
 }
@@ -523,7 +547,7 @@ tuple_impls_joinable!(A B);
 tuple_impls_joinable!(A);
 
 #[cfg(test)]
-mod static_tests {
+mod tests {
     use crate::*;
 
     #[test]
@@ -632,5 +656,55 @@ mod static_tests {
         let mut locks = ColumnLocks::new((WithEntities, Maybe(&u64s), &u32s), &world);
         let returned = locks.into_iter().collect::<Vec<_>>();
         assert_eq!(returned, [(e1, None, &10_u32), (e2, None, &12_u32)]);
+    }
+}
+
+#[cfg(test)]
+mod mismatched_world_id_tests {
+    use crate::*;
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn ref_join() {
+        let world = World::new();
+        let mut other_world = World::new();
+        let other_u32s = other_world.new_static_column::<u32>();
+        ColumnLocks::new(&other_u32s, &world);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn mut_join() {
+        let world = World::new();
+        let mut other_world = World::new();
+        let mut other_u32s = other_world.new_static_column::<u32>();
+        ColumnLocks::new(&mut other_u32s, &world);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn maybe_join() {
+        let world = World::new();
+        let mut other_world = World::new();
+        let other_u32s = other_world.new_static_column::<u32>();
+        ColumnLocks::new(Maybe(&other_u32s), &world);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn unsatisfied_join() {
+        let world = World::new();
+        let mut other_world = World::new();
+        let other_u32s = other_world.new_static_column::<u32>();
+        ColumnLocks::new(Unsatisfied(&other_u32s), &world);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn multi_join() {
+        let world = World::new();
+        let mut other_world = World::new();
+        let other_u32s = other_world.new_static_column::<u32>();
+        ColumnLocks::new((WithEntities, &other_u32s), &world);
     }
 }

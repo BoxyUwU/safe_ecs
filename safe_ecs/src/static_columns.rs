@@ -3,7 +3,10 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::{world::Columns, Component, EcsTypeId, Entity, World};
+use crate::{
+    world::{Columns, WorldId},
+    Component, EcsTypeId, Entity, World,
+};
 
 pub struct StaticColumnsInner<T>(pub(crate) Vec<Vec<T>>);
 impl<T> StaticColumnsInner<T> {
@@ -14,12 +17,17 @@ impl<T> StaticColumnsInner<T> {
 pub struct StaticColumns<T> {
     pub(crate) inner: Rc<RefCell<StaticColumnsInner<T>>>,
     pub(crate) id: EcsTypeId,
+    pub(crate) world_id: WorldId,
 }
 impl<T: Component> StaticColumns<T> {
-    pub fn new(id: EcsTypeId) -> (Self, Weak<RefCell<StaticColumnsInner<T>>>) {
+    pub(crate) fn new(
+        id: EcsTypeId,
+        world_id: WorldId,
+    ) -> (Self, Weak<RefCell<StaticColumnsInner<T>>>) {
         let columns = StaticColumns::<T> {
             inner: StaticColumnsInner::new(),
             id,
+            world_id,
         };
         let weak_ref = Rc::downgrade(&columns.inner);
         (columns, weak_ref)
@@ -35,7 +43,27 @@ impl<T: Component> StaticColumns<T> {
         RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.0[idx][..])
     }
 
+    pub(crate) fn assert_world_id(&self, id: WorldId) {
+        if self.world_id != id {
+            panic!(
+                "[Mismatched WorldIds]: attempt to use World: WorldId({}) with StaticColumn<{}>: WorldId({})",
+                self.world_id.inner(),
+                core::any::type_name::<T>(),
+                id.inner(),
+            )
+        }
+    }
+
+    pub fn world_id(&self) -> WorldId {
+        self.world_id
+    }
+
+    pub fn ecs_type_id(&self) -> EcsTypeId {
+        self.id
+    }
+
     pub fn get_component(&self, world: &World, entity: Entity) -> Option<Ref<'_, T>> {
+        self.assert_world_id(world.id);
         let archetype_id = world.entities.meta(entity)?.archetype;
         let archetype = &world.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
@@ -46,6 +74,7 @@ impl<T: Component> StaticColumns<T> {
     }
 
     pub fn get_component_mut(&mut self, world: &World, entity: Entity) -> Option<RefMut<'_, T>> {
+        self.assert_world_id(world.id);
         let archetype_id = world.entities.meta(entity)?.archetype;
         let archetype = &world.archetypes[archetype_id];
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
@@ -58,6 +87,7 @@ impl<T: Component> StaticColumns<T> {
     // strictly speaking this does not need `self` at all, this could be a method
     // on world taking `&self` as it stores a handle to this storage.
     pub fn has_component(&self, world: &World, entity: Entity) -> bool {
+        self.assert_world_id(world.id);
         let archetype_id = match world.entities.meta(entity) {
             Some(meta) => meta.archetype,
             None => return false,
@@ -76,6 +106,7 @@ impl<T: Component> StaticColumns<T> {
         entity: Entity,
         component: T,
     ) -> Option<T> {
+        self.assert_world_id(world.id);
         if let Some(mut old_component) = self.get_component_mut(world, entity) {
             return Some(core::mem::replace(&mut *old_component, component));
         }
@@ -88,6 +119,7 @@ impl<T: Component> StaticColumns<T> {
 
     /// same as `insert_component`
     pub fn remove_component(&mut self, world: &mut World, entity: Entity) -> Option<T> {
+        self.assert_world_id(world.id);
         if self.has_component(&*world, entity) == false {
             return None;
         }
@@ -261,5 +293,60 @@ mod tests {
         world.spawn().insert(&mut u32borrows, b);
         drop(u32borrows);
         assert_eq!(a, 12);
+    }
+}
+
+#[cfg(test)]
+mod mismatched_world_id_tests {
+    use crate::*;
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn remove_component() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let mut other_world = World::new();
+        let mut other_u32s = other_world.new_static_column::<u32>();
+        other_u32s.remove_component(&mut world, e);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn insert_component() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let mut other_world = World::new();
+        let mut other_u32s = other_world.new_static_column::<u32>();
+        other_u32s.insert_component(&mut world, e, 10);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn has_component() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let mut other_world = World::new();
+        let other_u32s = other_world.new_static_column::<u32>();
+        other_u32s.has_component(&world, e);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn get_component_mut() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let mut other_world = World::new();
+        let mut other_u32s = other_world.new_static_column::<u32>();
+        other_u32s.get_component_mut(&world, e);
+    }
+
+    #[test]
+    #[should_panic = "[Mismatched WorldIds]:"]
+    fn get_component() {
+        let mut world = World::new();
+        let e = world.spawn().id();
+        let mut other_world = World::new();
+        let other_u32s = other_world.new_static_column::<u32>();
+        other_u32s.get_component(&world, e);
     }
 }

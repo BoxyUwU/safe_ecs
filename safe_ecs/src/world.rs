@@ -1,4 +1,6 @@
-use std::{alloc::Layout, cell::RefCell, collections::HashMap, rc::Weak};
+use std::{
+    alloc::Layout, cell::RefCell, collections::HashMap, rc::Weak, sync::atomic::AtomicUsize,
+};
 
 use crate::{
     dynamic_storage::ErasedBytesVec,
@@ -57,15 +59,30 @@ impl Archetype {
     }
 }
 
+static NEXT_WORLD_ID: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Copy, Clone)]
+pub struct WorldId(usize);
+impl WorldId {
+    pub fn inner(self) -> usize {
+        self.0
+    }
+}
+
 pub struct World<'data> {
     pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
     pub(crate) columns: HashMap<EcsTypeId, Weak<RefCell<dyn Columns + 'data>>>,
+    pub(crate) id: WorldId,
     next_ecs_type_id: EcsTypeId,
 }
 
 impl<'a> World<'a> {
     pub fn new() -> World<'a> {
+        let id = NEXT_WORLD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if id == usize::MAX {
+            panic!("how did you manage to make usize::MAX worlds");
+        }
         World {
             entities: Entities::new(),
             archetypes: vec![Archetype {
@@ -74,6 +91,9 @@ impl<'a> World<'a> {
             }],
             columns: HashMap::new(),
             next_ecs_type_id: EcsTypeId(0),
+            // dont care about panicing on `usize::MAX + 1` because thats a lot of worlds
+            // and i dont think anyon
+            id: WorldId(id),
         }
     }
 
@@ -83,9 +103,13 @@ impl<'a> World<'a> {
             .0
             .checked_add(1)
             .expect("dont make usize::MAX ecs_type_ids ???");
-        let (column, weak) = StaticColumns::<T>::new(ecs_type_id);
+        let (column, weak) = StaticColumns::<T>::new(ecs_type_id, self.id);
         self.columns.insert(ecs_type_id, weak);
         column
+    }
+
+    pub fn id(&self) -> WorldId {
+        self.id
     }
 
     pub fn is_alive(&self, entity: Entity) -> bool {
