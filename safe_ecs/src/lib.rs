@@ -51,6 +51,7 @@ pub(crate) fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut
 #[cfg(test)]
 mod test_component_impls {
     use crate::Component;
+    impl<T: Component> Component for &T {}
     impl Component for bool {}
     impl Component for u8 {}
     impl Component for i8 {}

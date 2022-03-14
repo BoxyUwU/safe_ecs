@@ -16,9 +16,9 @@ use crate::{
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct EcsTypeId(usize);
 
-pub trait Component: 'static {}
+pub trait Component {}
 
-pub trait Columns: 'static {
+pub trait Columns {
     fn push_empty_column(&self);
     fn len(&self) -> usize;
     fn swap_remove_to(&self, old_col: usize, new_col: usize, entity_idx: usize);
@@ -64,15 +64,15 @@ impl Archetype {
     }
 }
 
-pub struct World {
+pub struct World<'a> {
     pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
-    pub(crate) columns: HashMap<EcsTypeId, Box<dyn Columns>>,
+    pub(crate) columns: HashMap<EcsTypeId, Box<dyn Columns + 'a>>,
     next_ecs_type_id: EcsTypeId,
 }
 
-impl World {
-    pub fn new() -> World {
+impl<'a> World<'a> {
+    pub fn new() -> World<'a> {
         World {
             entities: Entities::new(),
             archetypes: vec![Archetype {
@@ -84,7 +84,7 @@ impl World {
         }
     }
 
-    pub fn new_static_column<T: Component>(&mut self) -> StaticColumns<T> {
+    pub fn new_static_column<T: Component + 'a>(&mut self) -> StaticColumns<T> {
         let ecs_type_id = self.next_ecs_type_id;
         self.next_ecs_type_id.0 = ecs_type_id
             .0
@@ -99,7 +99,7 @@ impl World {
         self.entities.is_alive(entity)
     }
 
-    pub fn spawn(&mut self) -> EntityBuilder<'_> {
+    pub fn spawn(&mut self) -> EntityBuilder<'_, 'a> {
         let entity = self.entities.spawn(|entity| {
             self.archetypes[0].entities.push(entity);
         });
@@ -109,7 +109,7 @@ impl World {
         }
     }
 
-    pub fn entity_builder(&mut self, entity: Entity) -> EntityBuilder<'_> {
+    pub fn entity_builder(&mut self, entity: Entity) -> EntityBuilder<'_, 'a> {
         EntityBuilder {
             entity,
             world: self,
@@ -202,7 +202,7 @@ impl World {
     }
 }
 
-impl World {
+impl<'a> World<'a> {
     fn find_archetype_from_ids(&self, ids: &[EcsTypeId]) -> Option<usize> {
         self.archetypes.iter().position(|archetype| {
             (archetype.column_indices.len() == ids.len())
@@ -274,12 +274,12 @@ impl World {
 }
 
 // FIXME whats up with this and why no EntityMut or Ref
-pub struct EntityBuilder<'a> {
+pub struct EntityBuilder<'a, 'b> {
     entity: Entity,
-    world: &'a mut World,
+    world: &'a mut World<'b>,
 }
 
-impl<'a> EntityBuilder<'a> {
+impl<'a, 'b> EntityBuilder<'a, 'b> {
     pub fn insert<T: Component>(
         &mut self,
         storage: &mut StaticColumns<T>,
@@ -296,6 +296,26 @@ impl<'a> EntityBuilder<'a> {
 
     pub fn id(&self) -> Entity {
         self.entity
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::*;
+
+    #[test]
+    fn non_static() {
+        let a = 10;
+        let b = &a;
+        let mut world = World::new();
+        let mut u32borrows = world.new_static_column::<&u32>();
+        let e1 = world.spawn().insert(&mut u32borrows, b).id();
+        for (entity, data) in &mut ColumnLocks::new((WithEntities, &u32borrows), &world) {
+            assert_eq!(entity, e1);
+            assert_eq!(*data, b);
+            return;
+        }
+        unreachable!()
     }
 }
 

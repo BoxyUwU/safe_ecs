@@ -11,24 +11,24 @@ pub struct ColumnIterator<'lock, 'world: 'lock, C: Joinable + 'lock> {
     column_iter: Option<C::ItemIter<'lock>>,
 }
 
-pub struct ColumnLocks<'world, C: Joinable + 'world> {
+pub struct ColumnLocks<'world_data, 'world, C: Joinable + 'world> {
     ids: C::Ids,
-    world: &'world World,
+    world: &'world World<'world_data>,
     locks: C::Locks<'world>,
 }
 
 type ArchetypeIter<'world: 'lock, 'lock, C: Joinable + 'lock> =
     impl Iterator<Item = &'world Archetype> + 'lock;
-impl<'world, C: Joinable + 'world> ColumnLocks<'world, C> {
-    pub fn new(borrows: C, world: &'world World) -> Self {
+impl<'world_data, 'world, C: Joinable + 'world> ColumnLocks<'world_data, 'world, C> {
+    pub fn new(borrows: C, world: &'world World<'world_data>) -> Self {
         let ids = C::make_ids(&borrows, world);
         let locks = C::make_locks(borrows, world);
         Self { ids, locks, world }
     }
 }
 
-impl<'lock, 'world, C: Joinable> ColumnIterator<'lock, 'world, C> {
-    pub fn new(locks: &'lock mut ColumnLocks<'world, C>) -> Self {
+impl<'lock, 'world_data, 'world, C: Joinable> ColumnIterator<'lock, 'world, C> {
+    pub fn new(locks: &'lock mut ColumnLocks<'world_data, 'world, C>) -> Self {
         let state = C::make_state(&mut locks.locks);
 
         fn defining_use<'world: 'lock, 'lock, C: Joinable + 'lock>(
@@ -69,7 +69,9 @@ impl<'lock, 'world: 'lock, C: Joinable + 'lock> Iterator for ColumnIterator<'loc
     }
 }
 
-impl<'lock, 'world: 'lock, C: Joinable + 'lock> IntoIterator for &'lock mut ColumnLocks<'world, C> {
+impl<'lock, 'world_data, 'world: 'lock, C: Joinable + 'lock> IntoIterator
+    for &'lock mut ColumnLocks<'world_data, 'world, C>
+{
     type Item = C::Item<'lock>;
     type IntoIter = ColumnIterator<'lock, 'world, C>;
 
