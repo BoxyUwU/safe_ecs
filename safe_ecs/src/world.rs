@@ -118,12 +118,9 @@ impl<'a> World<'a> {
                 }
             });
     }
+}
 
-    pub fn has_component_dynamic(&self, entity: Entity, id: EcsTypeId) -> Option<bool> {
-        let archetype = self.entities.meta(entity)?.archetype;
-        Some(self.archetypes[archetype].column_indices.get(&id).is_some())
-    }
-
+impl<'a> World<'a> {
     /// Moves an entity between archetypes and all its components to new columns
     /// from a `remove` operation. Caller should handle actually removing data
     /// of `removed_id` from the column of the old archetype
@@ -193,9 +190,7 @@ impl<'a> World<'a> {
         new_archetype.entities.push(entity);
         Some(new_archetype)
     }
-}
 
-impl<'a> World<'a> {
     fn find_archetype_from_ids(&self, ids: &[EcsTypeId]) -> Option<usize> {
         self.archetypes.iter().position(|archetype| {
             (archetype.column_indices.len() == ids.len())
