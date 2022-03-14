@@ -1,4 +1,3 @@
-#![allow(unreachable_code, unused_imports)]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 #![feature(
     let_else,
