@@ -54,18 +54,21 @@ impl<'lock, 'world: 'lock, C: Joinable + 'lock> Iterator for ColumnIterator<'loc
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let Some(iter) = &mut self.column_iter else {
-                let archetype = self.archetype_iter.next()?;
-                let iter = C::iter_from_archetype(&mut self.state, archetype);
-                self.column_iter = Some(iter);
-                continue;
-            };
-
-            let Some(v) = C::advance_iter(iter) else {
-                self.column_iter = None;
-                continue;
-            };
-            return Some(v);
+            match &mut self.column_iter {
+                Some(iter) => match C::advance_iter(iter) {
+                    Some(v) => return Some(v),
+                    None => {
+                        self.column_iter = None;
+                        continue;
+                    }
+                },
+                None => {
+                    let archetype = self.archetype_iter.next()?;
+                    let iter = C::iter_from_archetype(&mut self.state, archetype);
+                    self.column_iter = Some(iter);
+                    continue;
+                }
+            }
         }
     }
 }

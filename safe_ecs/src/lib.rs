@@ -1,10 +1,5 @@
 #![cfg_attr(not(test), forbid(unsafe_code))]
-#![feature(
-    let_else,
-    map_try_insert,
-    type_alias_impl_trait,
-    generic_associated_types
-)]
+#![feature(type_alias_impl_trait, generic_associated_types)]
 
 mod column_join;
 mod entities;
@@ -16,11 +11,6 @@ pub use entities::Entity;
 pub use safe_ecs_derive::Component;
 pub use static_columns::StaticColumns;
 pub use world::{Component, EcsTypeId, EntityBuilder, World, WorldId};
-
-pub mod errors {
-    #[derive(Debug, Copy, Clone)]
-    pub struct WorldBorrowError(pub &'static str);
-}
 
 pub(crate) fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;
