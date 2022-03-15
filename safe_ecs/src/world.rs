@@ -1,8 +1,13 @@
-use std::{cell::RefCell, collections::HashMap, rc::Weak, sync::atomic::AtomicUsize};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+    sync::atomic::AtomicUsize,
+};
 
 use crate::{
     entities::{Entities, Entity, EntityMeta},
-    StaticColumns,
+    Table,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
@@ -10,9 +15,35 @@ pub struct EcsTypeId(usize);
 
 pub trait Component {}
 
+// implemented for `&(C: Columns)` or `&mut (C: Columns)`
+pub trait IterableColumns {
+    type Item<'lock>
+    where
+        Self: 'lock;
+    type IterState<'lock>
+    where
+        Self: 'lock;
+    type ArchetypeState<'lock>
+    where
+        Self: 'lock;
+
+    fn make_iter_state<'lock>(id: EcsTypeId, locks: Self) -> Self::IterState<'lock>
+    where
+        Self: 'lock;
+    fn make_archetype_state<'lock>(
+        state: &mut Self::IterState<'lock>,
+        archetype: &'lock Archetype,
+    ) -> Self::ArchetypeState<'lock>
+    where
+        Self: 'lock;
+
+    fn item_of_entity<'lock>(iter: &mut Self::ArchetypeState<'lock>) -> Option<Self::Item<'lock>>
+    where
+        Self: 'lock;
+}
+
 pub trait Columns {
-    fn push_empty_column(&mut self);
-    fn len(&self) -> usize;
+    fn push_empty_column(&mut self) -> usize;
     fn swap_remove_to(&mut self, old_col: usize, new_col: usize, entity_idx: usize);
     fn swap_remove_drop(&mut self, col: usize, entity_idx: usize);
 }
@@ -24,8 +55,38 @@ pub struct Archetype {
 }
 
 impl Archetype {
+    // fixme this is really slow lmao
     pub(crate) fn get_entity_idx(&self, entity: Entity) -> Option<usize> {
         self.entities.iter().position(|e| *e == entity)
+    }
+}
+
+pub struct Handle<T> {
+    pub(crate) inner: Rc<RefCell<T>>,
+    pub(crate) id: EcsTypeId,
+    pub(crate) world_id: WorldId,
+}
+impl<T: Default> Handle<T> {
+    pub(crate) fn new(id: EcsTypeId, world_id: WorldId) -> (Self, Weak<RefCell<T>>) {
+        let columns = Handle::<T> {
+            inner: Default::default(),
+            id,
+            world_id,
+        };
+        let weak_ref = Rc::downgrade(&columns.inner);
+        (columns, weak_ref)
+    }
+}
+impl<T> Handle<T> {
+    pub fn assert_world_id(&self, id: WorldId) {
+        if self.world_id != id {
+            panic!(
+                "[Mismatched WorldIds]: attempt to use World: WorldId({}) with Handle<{}>: WorldId({})",
+                self.world_id.inner(),
+                core::any::type_name::<T>(),
+                id.inner(),
+            )
+        }
     }
 }
 
@@ -61,19 +122,21 @@ impl<'a> World<'a> {
             }],
             columns: HashMap::new(),
             next_ecs_type_id: EcsTypeId(0),
-            // dont care about panicing on `usize::MAX + 1` because thats a lot of worlds
-            // and i dont think anyon
             id: WorldId(id),
         }
     }
 
-    pub fn new_static_column<T: Component + 'a>(&mut self) -> StaticColumns<T> {
+    pub fn new_static_column<T: Component + 'a>(&mut self) -> Handle<Table<T>> {
+        self.new_storage_handle()
+    }
+
+    pub fn new_storage_handle<C: Default + Columns + 'a>(&mut self) -> Handle<C> {
         let ecs_type_id = self.next_ecs_type_id;
         self.next_ecs_type_id.0 = ecs_type_id
             .0
             .checked_add(1)
             .expect("dont make usize::MAX ecs_type_ids ???");
-        let (column, weak) = StaticColumns::<T>::new(ecs_type_id, self.id);
+        let (column, weak) = Handle::<C>::new(ecs_type_id, self.id);
         self.columns.insert(ecs_type_id, weak);
         column
     }
@@ -249,11 +312,7 @@ impl<'a> World<'a> {
             .into_iter()
             .map(|type_id| match self.columns[&type_id].upgrade() {
                 None => (type_id, 0),
-                Some(columns) => {
-                    let mut columns = columns.borrow_mut();
-                    columns.push_empty_column();
-                    (type_id, columns.len() - 1)
-                }
+                Some(columns) => (type_id, columns.borrow_mut().push_empty_column()),
             })
             .collect::<HashMap<_, _>>();
         self.archetypes.push(Archetype {
@@ -273,14 +332,14 @@ pub struct EntityBuilder<'a, 'b> {
 impl<'a, 'b> EntityBuilder<'a, 'b> {
     pub fn insert<T: Component>(
         &mut self,
-        storage: &mut StaticColumns<T>,
+        storage: &mut Handle<Table<T>>,
         component: T,
     ) -> &mut Self {
         storage.insert_component(self.world, self.entity, component);
         self
     }
 
-    pub fn remove<T: Component>(&mut self, storage: &mut StaticColumns<T>) -> &mut Self {
+    pub fn remove<T: Component>(&mut self, storage: &mut Handle<Table<T>>) -> &mut Self {
         storage.remove_component(self.world, self.entity);
         self
     }

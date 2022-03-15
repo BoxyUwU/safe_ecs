@@ -9,8 +9,10 @@ mod world;
 pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use entities::Entity;
 pub use safe_ecs_derive::Component;
-pub use static_columns::StaticColumns;
-pub use world::{Component, EcsTypeId, EntityBuilder, World, WorldId};
+pub use static_columns::Table;
+pub use world::{
+    Columns, Component, EcsTypeId, EntityBuilder, Handle, IterableColumns, World, WorldId,
+};
 
 pub(crate) fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;

@@ -1,57 +1,24 @@
-use std::{
-    cell::{Ref, RefCell, RefMut},
-    rc::{Rc, Weak},
-};
+use std::cell::{Ref, RefMut};
 
 use crate::{
-    world::{Columns, WorldId},
-    Component, EcsTypeId, Entity, World,
+    world::{Archetype, Columns, WorldId},
+    Component, EcsTypeId, Entity, Handle, IterableColumns, World,
 };
 
-pub struct StaticColumnsInner<T>(pub(crate) Vec<Vec<T>>);
-impl<T> StaticColumnsInner<T> {
-    pub fn new() -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self(vec![vec![]])))
-    }
-}
-pub struct StaticColumns<T> {
-    pub(crate) inner: Rc<RefCell<StaticColumnsInner<T>>>,
-    pub(crate) id: EcsTypeId,
-    pub(crate) world_id: WorldId,
-}
-impl<T: Component> StaticColumns<T> {
-    pub(crate) fn new(
-        id: EcsTypeId,
-        world_id: WorldId,
-    ) -> (Self, Weak<RefCell<StaticColumnsInner<T>>>) {
-        let columns = StaticColumns::<T> {
-            inner: StaticColumnsInner::new(),
-            id,
-            world_id,
-        };
-        let weak_ref = Rc::downgrade(&columns.inner);
-        (columns, weak_ref)
+pub struct Table<T>(pub(crate) Vec<Vec<T>>);
+impl<T> Default for Table<T> {
+    fn default() -> Self {
+        Table(vec![])
     }
 }
 
-impl<T: Component> StaticColumns<T> {
+impl<T: Component> Handle<Table<T>> {
     fn get_column(&self, _: &World, idx: usize) -> Ref<'_, [T]> {
         Ref::map(self.inner.borrow(), |inner| &inner.0[idx][..])
     }
 
     fn get_column_mut(&mut self, _: &World, idx: usize) -> RefMut<'_, [T]> {
         RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.0[idx][..])
-    }
-
-    pub(crate) fn assert_world_id(&self, id: WorldId) {
-        if self.world_id != id {
-            panic!(
-                "[Mismatched WorldIds]: attempt to use World: WorldId({}) with StaticColumn<{}>: WorldId({})",
-                self.world_id.inner(),
-                core::any::type_name::<T>(),
-                id.inner(),
-            )
-        }
     }
 
     pub fn world_id(&self) -> WorldId {
@@ -129,13 +96,10 @@ impl<T: Component> StaticColumns<T> {
     }
 }
 
-impl<T: Component> Columns for StaticColumnsInner<T> {
-    fn push_empty_column(&mut self) {
+impl<T: Component> Columns for Table<T> {
+    fn push_empty_column(&mut self) -> usize {
         self.0.push(vec![]);
-    }
-
-    fn len(&self) -> usize {
-        self.0.len()
+        self.0.len() - 1
     }
 
     fn swap_remove_to(&mut self, old_col: usize, new_col: usize, entity_idx: usize) {
@@ -147,6 +111,96 @@ impl<T: Component> Columns for StaticColumnsInner<T> {
     fn swap_remove_drop(&mut self, col: usize, entity_idx: usize) {
         let col = &mut self.0[col];
         col.swap_remove(entity_idx);
+    }
+}
+
+impl<'a, T: Component> IterableColumns for &'a Table<T> {
+    type Item<'lock>
+    where
+        Self: 'lock,
+    = &'lock T;
+
+    type IterState<'lock>
+    where
+        Self: 'lock,
+    = (EcsTypeId, &'lock [Vec<T>]);
+
+    type ArchetypeState<'lock>
+    where
+        Self: 'lock,
+    = std::slice::Iter<'lock, T>;
+
+    fn make_iter_state<'lock>(id: EcsTypeId, locks: &'a Table<T>) -> (EcsTypeId, &'lock [Vec<T>])
+    where
+        Self: 'lock,
+    {
+        (id, &locks.0[..])
+    }
+
+    fn make_archetype_state<'lock>(
+        (id, state): &mut Self::IterState<'lock>,
+        archetype: &'lock Archetype,
+    ) -> Self::ArchetypeState<'lock>
+    where
+        Self: 'lock,
+    {
+        let col = archetype.column_indices[id];
+        state[col].iter()
+    }
+
+    fn item_of_entity<'lock>(iter: &mut Self::ArchetypeState<'lock>) -> Option<Self::Item<'lock>>
+    where
+        Self: 'lock,
+    {
+        iter.next()
+    }
+}
+
+impl<'a, T: Component> IterableColumns for &'a mut Table<T> {
+    type Item<'lock>
+    where
+        Self: 'lock,
+    = &'lock mut T;
+
+    type IterState<'lock>
+    where
+        Self: 'lock,
+    = (EcsTypeId, usize, &'lock mut [Vec<T>]);
+
+    type ArchetypeState<'lock>
+    where
+        Self: 'lock,
+    = std::slice::IterMut<'lock, T>;
+
+    fn make_iter_state<'lock>(id: EcsTypeId, locks: Self) -> Self::IterState<'lock>
+    where
+        Self: 'lock,
+    {
+        (id, 0, &mut locks.0[..])
+    }
+
+    fn make_archetype_state<'lock>(
+        (ecs_type_id, num_chopped_off, lock_borrow): &mut Self::IterState<'lock>,
+        archetype: &'lock Archetype,
+    ) -> Self::ArchetypeState<'lock>
+    where
+        Self: 'lock,
+    {
+        let col = archetype.column_indices[ecs_type_id];
+        assert!(col >= *num_chopped_off);
+        let idx = col - *num_chopped_off;
+        let taken_out_borrow = std::mem::replace(lock_borrow, &mut []);
+        let (chopped_of, remaining) = taken_out_borrow.split_at_mut(idx + 1);
+        *lock_borrow = remaining;
+        *num_chopped_off += chopped_of.len();
+        chopped_of.last_mut().unwrap().iter_mut()
+    }
+
+    fn item_of_entity<'lock>(iter: &mut Self::ArchetypeState<'lock>) -> Option<Self::Item<'lock>>
+    where
+        Self: 'lock,
+    {
+        iter.next()
     }
 }
 

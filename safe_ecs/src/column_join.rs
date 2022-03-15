@@ -1,9 +1,8 @@
 use std::cell::{Ref, RefMut};
 
-use crate::static_columns::StaticColumnsInner;
-use crate::world::Archetype;
-use crate::{Component, EcsTypeId, Entity, World};
-use crate::{StaticColumns, WorldId};
+use crate::world::{Archetype, Columns};
+use crate::{EcsTypeId, Entity, IterableColumns, World};
+use crate::{Handle, WorldId};
 
 pub struct ColumnIterator<'lock, 'world: 'lock, C: Joinable + 'lock> {
     archetype_iter: ArchetypeIter<'world, 'lock, C>,
@@ -126,27 +125,30 @@ pub trait Joinable {
     fn assert_world_id(&self, world_id: WorldId);
 }
 
-impl<'a, T: Component> Joinable for &'a StaticColumns<T> {
+impl<'a, C: Columns> Joinable for &'a Handle<C>
+where
+    for<'b> &'b C: IterableColumns,
+{
     type Ids = EcsTypeId;
     type Locks<'world>
     where
         Self: 'world,
-    = (EcsTypeId, Ref<'world, StaticColumnsInner<T>>);
+    = (EcsTypeId, Ref<'world, C>);
 
     type State<'lock>
     where
         Self: 'lock,
-    = (EcsTypeId, &'lock [Vec<T>]);
+    = <&'lock C as IterableColumns>::IterState<'lock>;
 
     type Item<'lock>
     where
         Self: 'lock,
-    = &'lock T;
+    = <&'lock C as IterableColumns>::Item<'lock>;
 
     type ItemIter<'lock>
     where
         Self: 'lock,
-    = std::slice::Iter<'lock, T>;
+    = <&'lock C as IterableColumns>::ArchetypeState<'lock>;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
         self.id
@@ -159,23 +161,23 @@ impl<'a, T: Component> Joinable for &'a StaticColumns<T> {
         (self.id, self.inner.borrow())
     }
 
-    fn make_state<'lock, 'world>(locks: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
+    fn make_state<'lock, 'world>(
+        (id, locks): &'lock mut (EcsTypeId, Ref<'world, C>),
+    ) -> Self::State<'lock>
     where
         Self: 'world + 'lock,
     {
-        (locks.0, &locks.1 .0[..])
+        <&C as IterableColumns>::make_iter_state(*id, &**locks)
     }
 
     fn iter_from_archetype<'world>(
-        (id, state): &mut (EcsTypeId, &'world [Vec<T>]),
+        state: &mut Self::State<'world>,
         archetype: &'world Archetype,
     ) -> Self::ItemIter<'world>
     where
         Self: 'world,
     {
-        let col = archetype.column_indices[id];
-        let foo = *state;
-        foo[col].iter()
+        <&C as IterableColumns>::make_archetype_state(state, archetype)
     }
 
     fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
@@ -186,7 +188,7 @@ impl<'a, T: Component> Joinable for &'a StaticColumns<T> {
     where
         Self: 'world,
     {
-        iter.next()
+        <&C as IterableColumns>::item_of_entity(iter)
     }
 
     fn assert_world_id(&self, world_id: WorldId) {
@@ -194,27 +196,30 @@ impl<'a, T: Component> Joinable for &'a StaticColumns<T> {
     }
 }
 
-impl<'a, T: Component> Joinable for &'a mut StaticColumns<T> {
+impl<'a, C: Columns> Joinable for &'a mut Handle<C>
+where
+    for<'b> &'b mut C: IterableColumns,
+{
     type Ids = EcsTypeId;
     type Locks<'world>
     where
         Self: 'world,
-    = (EcsTypeId, RefMut<'world, StaticColumnsInner<T>>);
+    = (EcsTypeId, RefMut<'world, C>);
 
     type State<'lock>
     where
         Self: 'lock,
-    = (EcsTypeId, usize, &'lock mut [Vec<T>]);
+    = <&'lock mut C as IterableColumns>::IterState<'lock>;
 
     type Item<'lock>
     where
         Self: 'lock,
-    = &'lock mut T;
+    = <&'lock mut C as IterableColumns>::Item<'lock>;
 
     type ItemIter<'lock>
     where
         Self: 'lock,
-    = std::slice::IterMut<'lock, T>;
+    = <&'lock mut C as IterableColumns>::ArchetypeState<'lock>;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
         self.id
@@ -227,11 +232,11 @@ impl<'a, T: Component> Joinable for &'a mut StaticColumns<T> {
         (self.id, self.inner.borrow_mut())
     }
 
-    fn make_state<'lock, 'world>(locks: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
+    fn make_state<'lock, 'world>((id, locks): &'lock mut Self::Locks<'world>) -> Self::State<'lock>
     where
         Self: 'world + 'lock,
     {
-        (locks.0, 0, &mut locks.1 .0[..])
+        <&mut C as IterableColumns>::make_iter_state(*id, &mut **locks)
     }
 
     fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
@@ -242,24 +247,17 @@ impl<'a, T: Component> Joinable for &'a mut StaticColumns<T> {
     where
         Self: 'world,
     {
-        iter.next()
+        <&mut C as IterableColumns>::item_of_entity(iter)
     }
 
     fn iter_from_archetype<'world>(
-        (ecs_type_id, num_chopped_off, lock_borrow): &mut Self::State<'world>,
+        state: &mut Self::State<'world>,
         archetype: &'world Archetype,
     ) -> Self::ItemIter<'world>
     where
         Self: 'world,
     {
-        let col = archetype.column_indices[ecs_type_id];
-        assert!(col >= *num_chopped_off);
-        let idx = col - *num_chopped_off;
-        let taken_out_borrow = std::mem::replace(lock_borrow, &mut []);
-        let (chopped_of, remaining) = taken_out_borrow.split_at_mut(idx + 1);
-        *lock_borrow = remaining;
-        *num_chopped_off += chopped_of.len();
-        chopped_of.last_mut().unwrap().iter_mut()
+        <&mut C as IterableColumns>::make_archetype_state(state, archetype)
     }
 
     fn assert_world_id(&self, world_id: WorldId) {
