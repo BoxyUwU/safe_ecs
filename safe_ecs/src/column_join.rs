@@ -138,17 +138,17 @@ where
     type State<'lock>
     where
         Self: 'lock,
-    = <&'lock C as IterableColumns>::IterState<'lock>;
+    = <&'lock C as IterableColumns>::IterState;
 
     type Item<'lock>
     where
         Self: 'lock,
-    = <&'lock C as IterableColumns>::Item<'lock>;
+    = <&'lock C as IterableColumns>::Item;
 
     type ItemIter<'lock>
     where
         Self: 'lock,
-    = <&'lock C as IterableColumns>::ArchetypeState<'lock>;
+    = <&'lock C as IterableColumns>::ArchetypeState;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
         self.id
@@ -209,17 +209,17 @@ where
     type State<'lock>
     where
         Self: 'lock,
-    = <&'lock mut C as IterableColumns>::IterState<'lock>;
+    = <&'lock mut C as IterableColumns>::IterState;
 
     type Item<'lock>
     where
         Self: 'lock,
-    = <&'lock mut C as IterableColumns>::Item<'lock>;
+    = <&'lock mut C as IterableColumns>::Item;
 
     type ItemIter<'lock>
     where
         Self: 'lock,
-    = <&'lock mut C as IterableColumns>::ArchetypeState<'lock>;
+    = <&'lock mut C as IterableColumns>::ArchetypeState;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
         self.id

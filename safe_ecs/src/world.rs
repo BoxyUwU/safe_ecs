@@ -17,29 +17,18 @@ pub trait Component {}
 
 // implemented for `&(C: Columns)` or `&mut (C: Columns)`
 pub trait IterableColumns {
-    type Item<'lock>
-    where
-        Self: 'lock;
-    type IterState<'lock>
-    where
-        Self: 'lock;
-    type ArchetypeState<'lock>
-    where
-        Self: 'lock;
+    type Item;
+    type IterState;
+    type ArchetypeState;
 
-    fn make_iter_state<'lock>(id: EcsTypeId, locks: Self) -> Self::IterState<'lock>
-    where
-        Self: 'lock;
+    fn make_iter_state(id: EcsTypeId, locks: Self) -> Self::IterState;
     fn make_archetype_state<'lock>(
-        state: &mut Self::IterState<'lock>,
+        state: &mut Self::IterState,
         archetype: &'lock Archetype,
-    ) -> Self::ArchetypeState<'lock>
+    ) -> Self::ArchetypeState
     where
         Self: 'lock;
-
-    fn item_of_entity<'lock>(iter: &mut Self::ArchetypeState<'lock>) -> Option<Self::Item<'lock>>
-    where
-        Self: 'lock;
+    fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item>;
 }
 
 pub trait Columns {

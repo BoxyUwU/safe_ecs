@@ -115,32 +115,18 @@ impl<T: Component> Columns for Table<T> {
 }
 
 impl<'a, T: Component> IterableColumns for &'a Table<T> {
-    type Item<'lock>
-    where
-        Self: 'lock,
-    = &'lock T;
+    type Item = &'a T;
+    type IterState = (EcsTypeId, &'a [Vec<T>]);
+    type ArchetypeState = std::slice::Iter<'a, T>;
 
-    type IterState<'lock>
-    where
-        Self: 'lock,
-    = (EcsTypeId, &'lock [Vec<T>]);
-
-    type ArchetypeState<'lock>
-    where
-        Self: 'lock,
-    = std::slice::Iter<'lock, T>;
-
-    fn make_iter_state<'lock>(id: EcsTypeId, locks: &'a Table<T>) -> (EcsTypeId, &'lock [Vec<T>])
-    where
-        Self: 'lock,
-    {
+    fn make_iter_state(id: EcsTypeId, locks: &'a Table<T>) -> (EcsTypeId, &'a [Vec<T>]) {
         (id, &locks.0[..])
     }
 
     fn make_archetype_state<'lock>(
-        (id, state): &mut Self::IterState<'lock>,
+        (id, state): &mut Self::IterState,
         archetype: &'lock Archetype,
-    ) -> Self::ArchetypeState<'lock>
+    ) -> Self::ArchetypeState
     where
         Self: 'lock,
     {
@@ -148,41 +134,24 @@ impl<'a, T: Component> IterableColumns for &'a Table<T> {
         state[col].iter()
     }
 
-    fn item_of_entity<'lock>(iter: &mut Self::ArchetypeState<'lock>) -> Option<Self::Item<'lock>>
-    where
-        Self: 'lock,
-    {
+    fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item> {
         iter.next()
     }
 }
 
 impl<'a, T: Component> IterableColumns for &'a mut Table<T> {
-    type Item<'lock>
-    where
-        Self: 'lock,
-    = &'lock mut T;
+    type Item = &'a mut T;
+    type IterState = (EcsTypeId, usize, &'a mut [Vec<T>]);
+    type ArchetypeState = std::slice::IterMut<'a, T>;
 
-    type IterState<'lock>
-    where
-        Self: 'lock,
-    = (EcsTypeId, usize, &'lock mut [Vec<T>]);
-
-    type ArchetypeState<'lock>
-    where
-        Self: 'lock,
-    = std::slice::IterMut<'lock, T>;
-
-    fn make_iter_state<'lock>(id: EcsTypeId, locks: Self) -> Self::IterState<'lock>
-    where
-        Self: 'lock,
-    {
+    fn make_iter_state(id: EcsTypeId, locks: Self) -> Self::IterState {
         (id, 0, &mut locks.0[..])
     }
 
     fn make_archetype_state<'lock>(
-        (ecs_type_id, num_chopped_off, lock_borrow): &mut Self::IterState<'lock>,
+        (ecs_type_id, num_chopped_off, lock_borrow): &mut Self::IterState,
         archetype: &'lock Archetype,
-    ) -> Self::ArchetypeState<'lock>
+    ) -> Self::ArchetypeState
     where
         Self: 'lock,
     {
@@ -196,10 +165,7 @@ impl<'a, T: Component> IterableColumns for &'a mut Table<T> {
         chopped_of.last_mut().unwrap().iter_mut()
     }
 
-    fn item_of_entity<'lock>(iter: &mut Self::ArchetypeState<'lock>) -> Option<Self::Item<'lock>>
-    where
-        Self: 'lock,
-    {
+    fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item> {
         iter.next()
     }
 }
