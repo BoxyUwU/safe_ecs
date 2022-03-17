@@ -1,98 +1,91 @@
 use std::cell::{Ref, RefMut};
 
 use crate::{
-    world::{Archetype, Columns, WorldId},
-    Component, EcsTypeId, Entity, Handle, IterableColumns, World,
+    world::{Archetype, Columns, ColumnsApi},
+    Component, EcsTypeId, Entity, IterableColumns, World,
 };
 
 pub struct Table<T>(pub(crate) Vec<Vec<T>>);
+impl<T> Table<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 impl<T> Default for Table<T> {
     fn default() -> Self {
         Table(vec![])
     }
 }
 
-impl<T: Component> Handle<Table<T>> {
-    fn get_column(&self, _: &World, idx: usize) -> Ref<'_, [T]> {
-        Ref::map(self.inner.borrow(), |inner| &inner.0[idx][..])
-    }
+impl<T: Component> ColumnsApi for Table<T> {
+    type Insert<'a>
+    where
+        Self: 'a,
+    = T;
+    type Remove = T;
+    type Get = T;
 
-    fn get_column_mut(&mut self, _: &World, idx: usize) -> RefMut<'_, [T]> {
-        RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.0[idx][..])
-    }
-
-    pub fn world_id(&self) -> WorldId {
-        self.world_id
-    }
-
-    pub fn ecs_type_id(&self) -> EcsTypeId {
-        self.id
-    }
-
-    pub fn get_component(&self, world: &World, entity: Entity) -> Option<Ref<'_, T>> {
-        self.assert_world_id(world.id);
-        let archetype_id = world.entities.meta(entity)?.archetype;
-        let archetype = &world.archetypes[archetype_id];
-        let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = *archetype.column_indices.get(&self.id)?;
-        Some(Ref::map(self.get_column(world, column_idx), |col| {
-            &col[entity_idx]
-        }))
-    }
-
-    pub fn get_component_mut(&mut self, world: &World, entity: Entity) -> Option<RefMut<'_, T>> {
-        self.assert_world_id(world.id);
-        let archetype_id = world.entities.meta(entity)?.archetype;
-        let archetype = &world.archetypes[archetype_id];
-        let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = *archetype.column_indices.get(&self.id)?;
-        Some(RefMut::map(self.get_column_mut(world, column_idx), |col| {
-            &mut col[entity_idx]
-        }))
-    }
-
-    // strictly speaking this does not need `self` at all, this could be a method
-    // on world taking `&self` as it stores a handle to this storage.
-    pub fn has_component(&self, world: &World, entity: Entity) -> bool {
-        self.assert_world_id(world.id);
-        let archetype_id = match world.entities.meta(entity) {
-            Some(meta) => meta.archetype,
-            None => return false,
-        };
-        world.archetypes[archetype_id]
-            .column_indices
-            .contains_key(&self.id)
-    }
-
-    // strictly speaking this does not need `self` at all, this could be a method on
-    // world as it stores a handle to this storage. Taking `&mut self` "feels" more correct tho.
-    // this operation potentially involves mutably accessing every single storage tied to the world.
-    pub fn insert_component(
-        &mut self,
-        world: &mut World,
+    fn get_component<'a>(
+        this: Ref<'a, Self>,
+        world: &World,
+        id: EcsTypeId,
         entity: Entity,
-        component: T,
-    ) -> Option<T> {
-        self.assert_world_id(world.id);
-        if let Some(mut old_component) = self.get_component_mut(world, entity) {
-            return Some(core::mem::replace(&mut *old_component, component));
-        }
-
-        let new_archetype = world.move_entity_from_insert(entity, self.id)?;
-        let column_idx = *new_archetype.column_indices.get(&self.id).unwrap();
-        self.inner.borrow_mut().0[column_idx].push(component);
-        None
+    ) -> Option<Ref<'a, T>> {
+        let archetype_id = world.entity_meta(entity)?.archetype;
+        let archetype = world.get_archetype(archetype_id);
+        let entity_idx = archetype.get_entity_idx(entity).unwrap();
+        let column_idx = archetype.column_index(id)?;
+        Some(Ref::map(this, |this| &this.0[column_idx][entity_idx]))
     }
 
-    /// same as `insert_component`
-    pub fn remove_component(&mut self, world: &mut World, entity: Entity) -> Option<T> {
-        self.assert_world_id(world.id);
-        if self.has_component(&*world, entity) == false {
-            return None;
-        }
-        let (entity_idx, old_archetype) = world.move_entity_from_remove(entity, self.id)?;
-        let column_idx = *old_archetype.column_indices.get(&self.id).unwrap();
-        Some(self.inner.borrow_mut().0[column_idx].swap_remove(entity_idx))
+    fn get_component_mut<'a>(
+        this: RefMut<'a, Self>,
+        world: &World,
+        id: EcsTypeId,
+        entity: Entity,
+    ) -> Option<RefMut<'a, T>> {
+        let archetype_id = world.entity_meta(entity)?.archetype;
+        let archetype = world.get_archetype(archetype_id);
+        let entity_idx = archetype.get_entity_idx(entity).unwrap();
+        let column_idx = archetype.column_index(id)?;
+        Some(RefMut::map(this, |this| {
+            &mut this.0[column_idx][entity_idx]
+        }))
+    }
+
+    fn insert_component<'a, 'b>(
+        mut this: RefMut<'a, Self>,
+        world: &mut World,
+        id: EcsTypeId,
+        entity: Entity,
+        data: Self::Insert<'b>,
+    ) where
+        Self: 'b,
+    {
+        let archetype_id = world.entity_meta(entity).unwrap().archetype;
+        let archetype = world.get_archetype(archetype_id);
+        let column_idx = archetype.column_index(id).unwrap();
+        this.0[column_idx].push(data);
+    }
+
+    fn remove_component<'a>(
+        mut this: RefMut<'a, Self>,
+        world: &mut World,
+        id: EcsTypeId,
+        entity: Entity,
+    ) -> T {
+        let archetype_id = world.entity_meta(entity).unwrap().archetype;
+        let archetype = world.get_archetype(archetype_id);
+        let entity_idx = archetype.get_entity_idx(entity).unwrap();
+        let column_idx = archetype.column_index(id).unwrap();
+        this.0[column_idx].swap_remove(entity_idx)
+    }
+
+    fn insert_overwrite<'a>(mut overwrite: RefMut<'_, T>, data: T) -> T
+    where
+        Self: 'a,
+    {
+        std::mem::replace(&mut *overwrite, data)
     }
 }
 
@@ -190,7 +183,7 @@ mod tests {
     #[test]
     fn has_component() {
         let mut world = World::new();
-        let u32s = world.new_static_column::<u32>();
+        let u32s = world.new_handle(Table::<u32>::new());
         let e = world.spawn().id();
         assert_eq!(u32s.has_component(&world, e), false);
     }
@@ -198,7 +191,7 @@ mod tests {
     #[test]
     fn basic_insert() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         assert_eq!(*u32s.get_component(&world, e).unwrap(), 10_u32);
@@ -207,7 +200,7 @@ mod tests {
     #[test]
     fn insert_overwrite() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         assert_eq!(
@@ -220,8 +213,8 @@ mod tests {
     #[test]
     fn insert_archetype_change() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
-        let mut u64s = world.new_static_column::<u64>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let mut u64s = world.new_handle(Table::<u64>::new());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         u64s.insert_component(&mut world, e, 12_u64).unwrap_none();
@@ -234,9 +227,10 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "Unexpected dead entity"]
     fn insert_on_dead() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         world.despawn(e);
@@ -246,7 +240,7 @@ mod tests {
     #[test]
     fn basic_remove() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e = world.spawn().id();
         u32s.remove_component(&mut world, e).unwrap_none();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
@@ -257,8 +251,8 @@ mod tests {
     #[test]
     fn remove_archetype_change() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
-        let mut u64s = world.new_static_column::<u64>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let mut u64s = world.new_handle(Table::<u64>::new());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         u64s.insert_component(&mut world, e, 12_u64).unwrap_none();
@@ -272,9 +266,10 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "Unexpected dead entity"]
     fn remove_on_dead() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, 10_u32).unwrap_none();
         world.despawn(e);
@@ -286,7 +281,7 @@ mod tests {
         let a = 10;
         let b = &a;
         let mut world = World::new();
-        let mut u32borrows = world.new_static_column::<&u32>();
+        let mut u32borrows = world.new_handle(Table::<&u32>::new());
         let e1 = world.spawn().insert(&mut u32borrows, b).id();
         for (entity, data) in &mut ColumnLocks::new((WithEntities, &u32borrows), &world) {
             assert_eq!(entity, e1);
@@ -309,7 +304,7 @@ mod tests {
         let mut a = 10;
         let b = Foo(&mut a);
         let mut world = World::new();
-        let mut u32borrows = world.new_static_column::<Foo<'_>>();
+        let mut u32borrows = world.new_handle(Table::<Foo<'_>>::new());
         world.spawn().insert(&mut u32borrows, b);
         drop(u32borrows);
         assert_eq!(a, 12);
@@ -326,7 +321,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_static_column::<u32>();
+        let mut other_u32s = other_world.new_handle(Table::<u32>::new());
         other_u32s.remove_component(&mut world, e);
     }
 
@@ -336,7 +331,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_static_column::<u32>();
+        let mut other_u32s = other_world.new_handle(Table::<u32>::new());
         other_u32s.insert_component(&mut world, e, 10);
     }
 
@@ -346,7 +341,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_static_column::<u32>();
+        let other_u32s = other_world.new_handle(Table::<u32>::new());
         other_u32s.has_component(&world, e);
     }
 
@@ -356,7 +351,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_static_column::<u32>();
+        let mut other_u32s = other_world.new_handle(Table::<u32>::new());
         other_u32s.get_component_mut(&world, e);
     }
 
@@ -366,7 +361,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_static_column::<u32>();
+        let other_u32s = other_world.new_handle(Table::<u32>::new());
         other_u32s.get_component(&world, e);
     }
 }

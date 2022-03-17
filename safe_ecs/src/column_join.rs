@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn for_loop() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e1 = world.spawn().insert(&mut u32s, 10).id();
         for data in ColumnLocks::new((WithEntities, &u32s), &world).into_iter() {
             assert_eq!(data, (e1, &10));
@@ -566,9 +566,9 @@ mod tests {
     #[test]
     fn simple_query() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
-        let mut u64s = world.new_static_column::<u64>();
-        let mut u128s = world.new_static_column::<u128>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let mut u64s = world.new_handle(Table::<u64>::new());
+        let mut u128s = world.new_handle(Table::<u128>::new());
         world
             .spawn()
             .insert(&mut u32s, 10_u32)
@@ -587,9 +587,9 @@ mod tests {
     #[test]
     fn tuple_query() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
-        let mut u64s = world.new_static_column::<u64>();
-        let mut u128s = world.new_static_column::<u128>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let mut u64s = world.new_handle(Table::<u64>::new());
+        let mut u128s = world.new_handle(Table::<u128>::new());
         let e1 = world
             .spawn()
             .insert(&mut u32s, 10_u32)
@@ -608,9 +608,9 @@ mod tests {
     #[test]
     fn maybe_query() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
-        let mut u64s = world.new_static_column::<u64>();
-        let mut u128s = world.new_static_column::<u128>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let mut u64s = world.new_handle(Table::<u64>::new());
+        let mut u128s = world.new_handle(Table::<u128>::new());
 
         let e1 = world
             .spawn()
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn query_with_despawned() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
         let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
         world.despawn(e1);
 
@@ -650,8 +650,8 @@ mod tests {
     #[test]
     fn complex_maybe_query() {
         let mut world = World::new();
-        let mut u32s = world.new_static_column::<u32>();
-        let u64s = world.new_static_column::<u64>();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let u64s = world.new_handle(Table::<u64>::new());
         let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
         let e2 = world.spawn().insert(&mut u32s, 12_u32).id();
         let mut locks = ColumnLocks::new((WithEntities, Maybe(&u64s), &u32s), &world);
@@ -669,7 +669,7 @@ mod mismatched_world_id_tests {
     fn ref_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_static_column::<u32>();
+        let other_u32s = other_world.new_handle(Table::<u32>::new());
         ColumnLocks::new(&other_u32s, &world);
     }
 
@@ -678,7 +678,7 @@ mod mismatched_world_id_tests {
     fn mut_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_static_column::<u32>();
+        let mut other_u32s = other_world.new_handle(Table::<u32>::new());
         ColumnLocks::new(&mut other_u32s, &world);
     }
 
@@ -687,7 +687,7 @@ mod mismatched_world_id_tests {
     fn maybe_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_static_column::<u32>();
+        let other_u32s = other_world.new_handle(Table::<u32>::new());
         ColumnLocks::new(Maybe(&other_u32s), &world);
     }
 
@@ -696,7 +696,7 @@ mod mismatched_world_id_tests {
     fn unsatisfied_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_static_column::<u32>();
+        let other_u32s = other_world.new_handle(Table::<u32>::new());
         ColumnLocks::new(Unsatisfied(&other_u32s), &world);
     }
 
@@ -705,7 +705,7 @@ mod mismatched_world_id_tests {
     fn multi_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_static_column::<u32>();
+        let other_u32s = other_world.new_handle(Table::<u32>::new());
         ColumnLocks::new((WithEntities, &other_u32s), &world);
     }
 }

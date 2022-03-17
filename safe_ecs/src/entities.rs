@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub struct Entity(pub(crate) usize);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub(crate) struct EntityMeta {
-    pub(crate) archetype: usize,
+pub struct EntityMeta {
+    pub archetype: usize,
 }
 
 #[derive(Debug)]

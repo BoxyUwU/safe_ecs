@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell, RefMut},
     collections::HashMap,
     rc::{Rc, Weak},
     sync::atomic::AtomicUsize,
@@ -15,7 +15,53 @@ pub struct EcsTypeId(usize);
 
 pub trait Component {}
 
-// implemented for `&(C: Columns)` or `&mut (C: Columns)`
+pub trait ColumnsApi {
+    type Insert<'a>
+    where
+        Self: 'a;
+    type Remove;
+    type Get: ?Sized;
+
+    fn get_component<'a>(
+        this: Ref<'a, Self>,
+        world: &World,
+        id: EcsTypeId,
+        entity: Entity,
+    ) -> Option<Ref<'a, Self::Get>>;
+    fn get_component_mut<'a>(
+        this: RefMut<'a, Self>,
+        world: &World,
+        id: EcsTypeId,
+        entity: Entity,
+    ) -> Option<RefMut<'a, Self::Get>>;
+    fn has_component(&self, world: &World, id: EcsTypeId, entity: Entity) -> bool {
+        world
+            .get_archetype(world.entity_meta(entity).unwrap().archetype)
+            .column_index(id)
+            .is_some()
+    }
+    fn insert_overwrite<'a>(
+        overwrite: RefMut<'_, Self::Get>,
+        data: Self::Insert<'a>,
+    ) -> Self::Remove
+    where
+        Self: 'a;
+    fn insert_component<'a, 'b>(
+        this: RefMut<'a, Self>,
+        world: &mut World,
+        id: EcsTypeId,
+        entity: Entity,
+        data: Self::Insert<'b>,
+    ) where
+        Self: 'b;
+    fn remove_component<'a>(
+        this: RefMut<'a, Self>,
+        world: &mut World,
+        id: EcsTypeId,
+        entity: Entity,
+    ) -> Self::Remove;
+}
+
 pub trait IterableColumns {
     type Item;
     type IterState;
@@ -45,20 +91,24 @@ pub struct Archetype {
 
 impl Archetype {
     // fixme this is really slow lmao
-    pub(crate) fn get_entity_idx(&self, entity: Entity) -> Option<usize> {
+    pub fn get_entity_idx(&self, entity: Entity) -> Option<usize> {
         self.entities.iter().position(|e| *e == entity)
+    }
+
+    pub fn column_index(&self, id: EcsTypeId) -> Option<usize> {
+        self.column_indices.get(&id).copied()
     }
 }
 
-pub struct Handle<T> {
+pub struct Handle<T: ?Sized> {
     pub(crate) inner: Rc<RefCell<T>>,
     pub(crate) id: EcsTypeId,
     pub(crate) world_id: WorldId,
 }
-impl<T: Default> Handle<T> {
-    pub(crate) fn new(id: EcsTypeId, world_id: WorldId) -> (Self, Weak<RefCell<T>>) {
+impl<T> Handle<T> {
+    pub(crate) fn new(columns: T, id: EcsTypeId, world_id: WorldId) -> (Self, Weak<RefCell<T>>) {
         let columns = Handle::<T> {
-            inner: Default::default(),
+            inner: Rc::new(RefCell::new(columns)),
             id,
             world_id,
         };
@@ -66,7 +116,7 @@ impl<T: Default> Handle<T> {
         (columns, weak_ref)
     }
 }
-impl<T> Handle<T> {
+impl<T: ?Sized> Handle<T> {
     pub fn assert_world_id(&self, id: WorldId) {
         if self.world_id != id {
             panic!(
@@ -76,6 +126,65 @@ impl<T> Handle<T> {
                 id.inner(),
             )
         }
+    }
+
+    pub fn world_id(&self) -> WorldId {
+        self.world_id
+    }
+
+    pub fn ecs_type_id(&self) -> EcsTypeId {
+        self.id
+    }
+}
+
+impl<C: ColumnsApi> Handle<C> {
+    pub fn get_component(&self, world: &World, entity: Entity) -> Option<Ref<'_, C::Get>> {
+        world.assert_alive(entity);
+        self.assert_world_id(world.id());
+        C::get_component(self.inner.borrow(), world, self.id, entity)
+    }
+    pub fn get_component_mut(
+        &mut self,
+        world: &World,
+        entity: Entity,
+    ) -> Option<RefMut<'_, C::Get>> {
+        world.assert_alive(entity);
+        self.assert_world_id(world.id());
+        C::get_component_mut(self.inner.borrow_mut(), world, self.id, entity)
+    }
+    pub fn has_component(&self, world: &World, entity: Entity) -> bool {
+        world.assert_alive(entity);
+        self.assert_world_id(world.id());
+        C::has_component(&*self.inner.borrow(), world, self.id, entity)
+    }
+    pub fn insert_component(
+        &mut self,
+        world: &mut World,
+        entity: Entity,
+        data: C::Insert<'_>,
+    ) -> Option<C::Remove> {
+        world.assert_alive(entity);
+        self.assert_world_id(world.id());
+
+        if let Some(comp) = self.get_component_mut(world, entity) {
+            return Some(C::insert_overwrite(comp, data));
+        }
+
+        world.move_entity_from_insert(entity, self.id).unwrap();
+        C::insert_component(self.inner.borrow_mut(), world, self.id, entity, data);
+        None
+    }
+    pub fn remove_component(&mut self, world: &mut World, entity: Entity) -> Option<C::Remove> {
+        world.assert_alive(entity);
+        self.assert_world_id(world.id());
+
+        if C::has_component(&*self.inner.borrow(), world, self.id, entity) == false {
+            return None;
+        }
+
+        let r = C::remove_component(self.inner.borrow_mut(), world, self.id, entity);
+        world.move_entity_from_remove(entity, self.id).unwrap();
+        Some(r)
     }
 }
 
@@ -115,17 +224,13 @@ impl<'a> World<'a> {
         }
     }
 
-    pub fn new_static_column<T: Component + 'a>(&mut self) -> Handle<Table<T>> {
-        self.new_storage_handle()
-    }
-
-    pub fn new_storage_handle<C: Default + Columns + 'a>(&mut self) -> Handle<C> {
+    pub fn new_handle<C: Columns + 'a>(&mut self, columns: C) -> Handle<C> {
         let ecs_type_id = self.next_ecs_type_id;
         self.next_ecs_type_id.0 = ecs_type_id
             .0
             .checked_add(1)
             .expect("dont make usize::MAX ecs_type_ids ???");
-        let (column, weak) = Handle::<C>::new(ecs_type_id, self.id);
+        let (column, weak) = Handle::<C>::new(columns, ecs_type_id, self.id);
         self.columns.insert(ecs_type_id, weak);
         column
     }
@@ -136,6 +241,12 @@ impl<'a> World<'a> {
 
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.entities.is_alive(entity)
+    }
+
+    pub fn assert_alive(&self, entity: Entity) {
+        if self.is_alive(entity) == false {
+            panic!("Unexpected dead entity: Entity({})", entity.0);
+        }
     }
 
     pub fn spawn(&mut self) -> EntityBuilder<'_, 'a> {
@@ -173,6 +284,14 @@ impl<'a> World<'a> {
 }
 
 impl<'a> World<'a> {
+    pub fn entity_meta(&self, entity: Entity) -> Option<&EntityMeta> {
+        self.entities.meta(entity)
+    }
+
+    pub fn get_archetype(&self, archetype: usize) -> &Archetype {
+        &self.archetypes[archetype]
+    }
+
     /// Moves an entity between archetypes and all its components to new columns
     /// from a `remove` operation. Caller should handle actually removing data
     /// of `removed_id` from the column of the old archetype

@@ -11,10 +11,11 @@ pub use entities::Entity;
 pub use safe_ecs_derive::Component;
 pub use static_columns::Table;
 pub use world::{
-    Columns, Component, EcsTypeId, EntityBuilder, Handle, IterableColumns, World, WorldId,
+    Archetype, Columns, ColumnsApi, Component, EcsTypeId, EntityBuilder, Handle, IterableColumns,
+    World, WorldId,
 };
 
-pub(crate) fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
+pub fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;
     match idx_1.cmp(&idx_2) {
         Ordering::Less => {
