@@ -309,6 +309,15 @@ mod tests {
         drop(u32borrows);
         assert_eq!(a, 12);
     }
+
+    #[test]
+    fn get_component() {
+        let mut world = World::new();
+        let mut u32s = world.new_handle(Table::<u32>::new());
+        let e = world.spawn().insert(&mut u32s, 10_u32).id();
+        let data = u32s.get_component_mut(&world, e).unwrap();
+        assert_eq!(*data, 10_u32);
+    }
 }
 
 #[cfg(test)]

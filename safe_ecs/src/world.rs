@@ -138,28 +138,32 @@ impl<T: ?Sized> Handle<T> {
 }
 
 impl<C: ColumnsApi> Handle<C> {
-    pub fn get_component(&self, world: &World, entity: Entity) -> Option<Ref<'_, C::Get>> {
+    pub fn get_component<'a>(
+        &'a self,
+        world: &'a World,
+        entity: Entity,
+    ) -> Option<Ref<'a, C::Get>> {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
         C::get_component(self.inner.borrow(), world, self.id, entity)
     }
-    pub fn get_component_mut(
-        &mut self,
-        world: &World,
+    pub fn get_component_mut<'a>(
+        &'a mut self,
+        world: &'a World,
         entity: Entity,
-    ) -> Option<RefMut<'_, C::Get>> {
+    ) -> Option<RefMut<'a, C::Get>> {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
         C::get_component_mut(self.inner.borrow_mut(), world, self.id, entity)
     }
-    pub fn has_component(&self, world: &World, entity: Entity) -> bool {
+    pub fn has_component<'a>(&'a self, world: &'a World, entity: Entity) -> bool {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
         C::has_component(&*self.inner.borrow(), world, self.id, entity)
     }
-    pub fn insert_component(
-        &mut self,
-        world: &mut World,
+    pub fn insert_component<'a>(
+        &'a mut self,
+        world: &'a mut World,
         entity: Entity,
         data: C::Insert<'_>,
     ) -> Option<C::Remove> {
@@ -174,7 +178,11 @@ impl<C: ColumnsApi> Handle<C> {
         C::insert_component(self.inner.borrow_mut(), world, self.id, entity, data);
         None
     }
-    pub fn remove_component(&mut self, world: &mut World, entity: Entity) -> Option<C::Remove> {
+    pub fn remove_component<'a>(
+        &'a mut self,
+        world: &'a mut World,
+        entity: Entity,
+    ) -> Option<C::Remove> {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
 
