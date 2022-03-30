@@ -150,10 +150,10 @@ impl DynamicTable {
 }
 
 impl ColumnsApi for DynamicTable {
-    type Insert<'a>
+    type Insert<'a> = &'a [MaybeUninit<u8>] 
     where
-        Self: 'a,
-    = &'a [MaybeUninit<u8>];
+        Self: 'a;
+
     type Remove = ();
     type Get = [MaybeUninit<u8>];
 

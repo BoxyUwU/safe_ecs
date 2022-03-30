@@ -18,10 +18,10 @@ impl<T> Default for Table<T> {
 }
 
 impl<T: Component> ColumnsApi for Table<T> {
-    type Insert<'a>
+    type Insert<'a> = T 
     where
-        Self: 'a,
-    = T;
+        Self: 'a;
+
     type Remove = T;
     type Get = T;
 

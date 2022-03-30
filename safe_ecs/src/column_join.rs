@@ -130,25 +130,21 @@ where
     for<'b> &'b C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world>
-    where
-        Self: 'world,
-    = (EcsTypeId, Ref<'world, C>);
+    type Locks<'world> = (EcsTypeId, Ref<'world, C>) 
+    where 
+        Self: 'world;
 
-    type State<'lock>
+    type State<'lock> = <&'lock C as IterableColumns>::IterState 
     where
-        Self: 'lock,
-    = <&'lock C as IterableColumns>::IterState;
+        Self: 'lock;
 
-    type Item<'lock>
-    where
-        Self: 'lock,
-    = <&'lock C as IterableColumns>::Item;
+    type Item<'lock> = <&'lock C as IterableColumns>::Item 
+    where 
+        Self: 'lock;
 
-    type ItemIter<'lock>
+    type ItemIter<'lock> = <&'lock C as IterableColumns>::ArchetypeState 
     where
-        Self: 'lock,
-    = <&'lock C as IterableColumns>::ArchetypeState;
+        Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
         self.id
@@ -201,25 +197,21 @@ where
     for<'b> &'b mut C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world>
-    where
-        Self: 'world,
-    = (EcsTypeId, RefMut<'world, C>);
+    type Locks<'world> = (EcsTypeId, RefMut<'world, C>)
+    where 
+        Self: 'world;
 
-    type State<'lock>
+    type State<'lock> = <&'lock mut C as IterableColumns>::IterState 
     where
-        Self: 'lock,
-    = <&'lock mut C as IterableColumns>::IterState;
+        Self: 'lock;
 
-    type Item<'lock>
+    type Item<'lock> = <&'lock mut C as IterableColumns>::Item 
     where
-        Self: 'lock,
-    = <&'lock mut C as IterableColumns>::Item;
+        Self: 'lock;
 
-    type ItemIter<'lock>
-    where
-        Self: 'lock,
-    = <&'lock mut C as IterableColumns>::ArchetypeState;
+    type ItemIter<'lock> = <&'lock mut C as IterableColumns>::ArchetypeState 
+    where 
+        Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
         self.id
@@ -269,25 +261,21 @@ pub struct WithEntities;
 impl Joinable for WithEntities {
     type Ids = ();
 
-    type Locks<'world>
-    where
-        Self: 'world,
-    = ();
+    type Locks<'world> = ()
+    where 
+        Self: 'world;
 
-    type State<'lock>
-    where
-        Self: 'lock,
-    = ();
+    type State<'lock> = ()
+    where 
+        Self: 'lock;
 
-    type Item<'lock>
+    type Item<'lock> = Entity 
     where
-        Self: 'lock,
-    = Entity;
+        Self: 'lock;
 
-    type ItemIter<'lock>
+    type ItemIter<'lock> = std::slice::Iter<'lock, Entity> 
     where
-        Self: 'lock,
-    = std::slice::Iter<'lock, Entity>;
+        Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {}
 
@@ -335,25 +323,21 @@ pub enum Either<T, U> {
 impl<J: Joinable> Joinable for Maybe<J> {
     type Ids = ();
 
-    type Locks<'world>
+    type Locks<'world> = (J::Ids, J::Locks<'world>)
     where
-        Self: 'world,
-    = (J::Ids, J::Locks<'world>);
+        Self: 'world;
 
-    type State<'lock>
+    type State<'lock> = (J::Ids, J::State<'lock>)
     where
-        Self: 'lock,
-    = (J::Ids, J::State<'lock>);
+        Self: 'lock;
 
-    type Item<'lock>
+    type Item<'lock> = Option<J::Item<'lock>>
     where
-        Self: 'lock,
-    = Option<J::Item<'lock>>;
+        Self: 'lock;
 
-    type ItemIter<'lock>
+    type ItemIter<'lock> = Either<J::ItemIter<'lock>, std::ops::Range<usize>>
     where
-        Self: 'lock,
-    = Either<J::ItemIter<'lock>, std::ops::Range<usize>>;
+        Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {}
 
@@ -407,25 +391,21 @@ pub struct Unsatisfied<J: Joinable>(pub J);
 impl<J: Joinable> Joinable for Unsatisfied<J> {
     type Ids = J::Ids;
 
-    type Locks<'world>
+    type Locks<'world> = J::Locks<'world>
     where
-        Self: 'world,
-    = J::Locks<'world>;
+        Self: 'world;
 
-    type State<'lock>
+    type State<'lock> = J::State<'lock>
     where
-        Self: 'lock,
-    = J::State<'lock>;
+        Self: 'lock;
 
-    type Item<'lock>
+    type Item<'lock> = ()
     where
-        Self: 'lock,
-    = ();
+        Self: 'lock;
 
-    type ItemIter<'lock>
+    type ItemIter<'lock> = std::ops::Range<usize>
     where
-        Self: 'lock,
-    = std::ops::Range<usize>;
+        Self: 'lock;
 
     fn make_ids(&self, world: &World) -> Self::Ids {
         J::make_ids(&self.0, world)
@@ -479,21 +459,21 @@ macro_rules! tuple_impls_joinable {
         impl<$($T: Joinable),*> Joinable for ($($T,)*) {
             type Ids = ($($T::Ids,)*);
 
-            type Locks<'world>
+            type Locks<'world> = ($($T::Locks<'world>,)*)
             where
-                Self: 'world = ($($T::Locks<'world>,)*);
+                Self: 'world;
 
-            type State<'lock>
+            type State<'lock> = ($($T::State<'lock>,)*)
             where
-                Self: 'lock = ($($T::State<'lock>,)*);
+                Self: 'lock;
 
-            type Item<'lock>
+            type Item<'lock> = ($($T::Item<'lock>,)*)
             where
-                Self: 'lock = ($($T::Item<'lock>,)*);
+                Self: 'lock;
 
-            type ItemIter<'lock>
+            type ItemIter<'lock> = ($($T::ItemIter<'lock>,)*)
             where
-                Self: 'lock = ($($T::ItemIter<'lock>,)*);
+                Self: 'lock;
 
             fn make_ids(&self, world: &World) -> Self::Ids {
                 let ($($T,)*) = self;
