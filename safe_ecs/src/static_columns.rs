@@ -2,7 +2,7 @@ use std::cell::{Ref, RefMut};
 
 use crate::{
     world::{Archetype, Columns, ColumnsApi},
-    Component, EcsTypeId, Entity, IterableColumns, World,
+    EcsTypeId, Entity, IterableColumns, World,
 };
 
 pub struct Table<T>(pub(crate) Vec<Vec<T>>);
@@ -17,7 +17,7 @@ impl<T> Default for Table<T> {
     }
 }
 
-impl<T: Component> ColumnsApi for Table<T> {
+impl<T> ColumnsApi for Table<T> {
     type Insert<'a> = T
     where
         Self: 'a;
@@ -89,7 +89,7 @@ impl<T: Component> ColumnsApi for Table<T> {
     }
 }
 
-impl<T: Component> Columns for Table<T> {
+impl<T> Columns for Table<T> {
     fn push_empty_column(&mut self) -> usize {
         self.0.push(vec![]);
         self.0.len() - 1
@@ -107,7 +107,7 @@ impl<T: Component> Columns for Table<T> {
     }
 }
 
-impl<'a, T: Component> IterableColumns for &'a Table<T> {
+impl<'a, T> IterableColumns for &'a Table<T> {
     type Item = &'a T;
     type IterState = (EcsTypeId, &'a [Vec<T>]);
     type ArchetypeState = std::slice::Iter<'a, T>;
@@ -132,7 +132,7 @@ impl<'a, T: Component> IterableColumns for &'a Table<T> {
     }
 }
 
-impl<'a, T: Component> IterableColumns for &'a mut Table<T> {
+impl<'a, T> IterableColumns for &'a mut Table<T> {
     type Item = &'a mut T;
     type IterState = (EcsTypeId, usize, &'a mut [Vec<T>]);
     type ArchetypeState = std::slice::IterMut<'a, T>;
@@ -293,7 +293,6 @@ mod tests {
 
     #[test]
     fn drop_called() {
-        #[derive(Component)]
         struct Foo<'a>(&'a mut u32);
         impl Drop for Foo<'_> {
             fn drop(&mut self) {

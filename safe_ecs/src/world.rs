@@ -13,8 +13,6 @@ use crate::{
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct EcsTypeId(usize);
 
-pub trait Component {}
-
 pub trait ColumnsApi {
     type Insert<'a>
     where
@@ -446,16 +444,12 @@ pub struct EntityBuilder<'a, 'b> {
 }
 
 impl<'a, 'b> EntityBuilder<'a, 'b> {
-    pub fn insert<T: Component>(
-        &mut self,
-        storage: &mut Handle<Table<T>>,
-        component: T,
-    ) -> &mut Self {
+    pub fn insert<T>(&mut self, storage: &mut Handle<Table<T>>, component: T) -> &mut Self {
         storage.insert_component(self.world, self.entity, component);
         self
     }
 
-    pub fn remove<T: Component>(&mut self, storage: &mut Handle<Table<T>>) -> &mut Self {
+    pub fn remove<T>(&mut self, storage: &mut Handle<Table<T>>) -> &mut Self {
         storage.remove_component(self.world, self.entity);
         self
     }

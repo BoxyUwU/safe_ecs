@@ -481,25 +481,6 @@ mod tests {
     }
 
     #[test]
-    fn drop_called() {
-        #[derive(Component)]
-        struct Foo<'a>(&'a mut u32);
-        impl Drop for Foo<'_> {
-            fn drop(&mut self) {
-                *self.0 = 12;
-            }
-        }
-
-        let mut a = 10;
-        let b = Foo(&mut a);
-        let mut world = World::new();
-        let mut u32borrows = world.new_handle(Table::<Foo<'_>>::new());
-        world.spawn().insert(&mut u32borrows, b);
-        drop(u32borrows);
-        assert_eq!(a, 12);
-    }
-
-    #[test]
     fn get_component() {
         let mut world = World::new();
         let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));

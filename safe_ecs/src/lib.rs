@@ -8,11 +8,10 @@ mod world;
 
 pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use entities::Entity;
-pub use safe_ecs_derive::Component;
 pub use static_columns::Table;
 pub use world::{
-    Archetype, Columns, ColumnsApi, Component, EcsTypeId, EntityBuilder, Handle, IterableColumns,
-    World, WorldId,
+    Archetype, Columns, ColumnsApi, EcsTypeId, EntityBuilder, Handle, IterableColumns, World,
+    WorldId,
 };
 
 pub fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
@@ -30,29 +29,4 @@ pub fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mu
             panic!("")
         }
     }
-}
-
-impl<T: Component> Component for &T {}
-impl Component for bool {}
-impl Component for u8 {}
-impl Component for i8 {}
-impl Component for u16 {}
-impl Component for i16 {}
-impl Component for u32 {}
-impl Component for i32 {}
-impl Component for u64 {}
-impl Component for i64 {}
-impl Component for usize {}
-impl Component for isize {}
-impl Component for u128 {}
-impl Component for i128 {}
-
-#[cfg(test)]
-#[test]
-fn derive_macro_works() {
-    #[derive(Component)]
-    struct Bar;
-
-    fn foo<T: Component>() {}
-    foo::<Bar>();
 }
