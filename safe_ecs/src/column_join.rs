@@ -130,19 +130,19 @@ where
     for<'b> &'b C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world> = (EcsTypeId, Ref<'world, C>) 
-    where 
+    type Locks<'world> = (EcsTypeId, Ref<'world, C>)
+    where
         Self: 'world;
 
-    type State<'lock> = <&'lock C as IterableColumns>::IterState 
+    type State<'lock> = <&'lock C as IterableColumns>::IterState
     where
         Self: 'lock;
 
-    type Item<'lock> = <&'lock C as IterableColumns>::Item 
-    where 
+    type Item<'lock> = <&'lock C as IterableColumns>::Item
+    where
         Self: 'lock;
 
-    type ItemIter<'lock> = <&'lock C as IterableColumns>::ArchetypeState 
+    type ItemIter<'lock> = <&'lock C as IterableColumns>::ArchetypeState
     where
         Self: 'lock;
 
@@ -198,19 +198,19 @@ where
 {
     type Ids = EcsTypeId;
     type Locks<'world> = (EcsTypeId, RefMut<'world, C>)
-    where 
+    where
         Self: 'world;
 
-    type State<'lock> = <&'lock mut C as IterableColumns>::IterState 
+    type State<'lock> = <&'lock mut C as IterableColumns>::IterState
     where
         Self: 'lock;
 
-    type Item<'lock> = <&'lock mut C as IterableColumns>::Item 
+    type Item<'lock> = <&'lock mut C as IterableColumns>::Item
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = <&'lock mut C as IterableColumns>::ArchetypeState 
-    where 
+    type ItemIter<'lock> = <&'lock mut C as IterableColumns>::ArchetypeState
+    where
         Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
@@ -262,18 +262,18 @@ impl Joinable for WithEntities {
     type Ids = ();
 
     type Locks<'world> = ()
-    where 
+    where
         Self: 'world;
 
     type State<'lock> = ()
-    where 
-        Self: 'lock;
-
-    type Item<'lock> = Entity 
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = std::slice::Iter<'lock, Entity> 
+    type Item<'lock> = Entity
+    where
+        Self: 'lock;
+
+    type ItemIter<'lock> = std::slice::Iter<'lock, Entity>
     where
         Self: 'lock;
 
@@ -526,166 +526,3 @@ tuple_impls_joinable!(A B C D);
 tuple_impls_joinable!(A B C);
 tuple_impls_joinable!(A B);
 tuple_impls_joinable!(A);
-
-#[cfg(test)]
-mod tests {
-    use crate::*;
-
-    #[test]
-    fn for_loop() {
-        let mut world = World::new();
-        let mut u32s = world.new_handle(Table::<u32>::new());
-        let e1 = world.spawn().insert(&mut u32s, 10).id();
-        for data in ColumnLocks::new((WithEntities, &u32s), &world).into_iter() {
-            assert_eq!(data, (e1, &10));
-            return;
-        }
-        unreachable!()
-    }
-
-    #[test]
-    fn simple_query() {
-        let mut world = World::new();
-        let mut u32s = world.new_handle(Table::<u32>::new());
-        let mut u64s = world.new_handle(Table::<u64>::new());
-        let mut u128s = world.new_handle(Table::<u128>::new());
-        world
-            .spawn()
-            .insert(&mut u32s, 10_u32)
-            .insert(&mut u64s, 12_u64)
-            .id();
-        world
-            .spawn()
-            .insert(&mut u64s, 13_u64)
-            .insert(&mut u128s, 9_u128)
-            .id();
-        let mut locks = ColumnLocks::new(&u64s, &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
-        assert_eq!(returned, [&12, &13]);
-    }
-
-    #[test]
-    fn tuple_query() {
-        let mut world = World::new();
-        let mut u32s = world.new_handle(Table::<u32>::new());
-        let mut u64s = world.new_handle(Table::<u64>::new());
-        let mut u128s = world.new_handle(Table::<u128>::new());
-        let e1 = world
-            .spawn()
-            .insert(&mut u32s, 10_u32)
-            .insert(&mut u64s, 12_u64)
-            .id();
-        world
-            .spawn()
-            .insert(&mut u64s, 13_u64)
-            .insert(&mut u128s, 9_u128)
-            .id();
-        let mut locks = ColumnLocks::new((WithEntities, &u32s, &u64s), &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
-        assert_eq!(returned, [(e1, &10, &12)]);
-    }
-
-    #[test]
-    fn maybe_query() {
-        let mut world = World::new();
-        let mut u32s = world.new_handle(Table::<u32>::new());
-        let mut u64s = world.new_handle(Table::<u64>::new());
-        let mut u128s = world.new_handle(Table::<u128>::new());
-
-        let e1 = world
-            .spawn()
-            .insert(&mut u32s, 10_u32)
-            .insert(&mut u64s, 12_u64)
-            .id();
-        let e2 = world
-            .spawn()
-            .insert(&mut u64s, 13_u64)
-            .insert(&mut u128s, 9_u128)
-            .id();
-
-        let mut locks =
-            ColumnLocks::new((WithEntities, Maybe(&u32s), &u64s, Maybe(&u128s)), &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
-        assert_eq!(
-            returned,
-            [
-                (e1, Some(&10_u32), &12_u64, None),
-                (e2, None, &13_u64, Some(&9_u128))
-            ],
-        )
-    }
-
-    #[test]
-    fn query_with_despawned() {
-        let mut world = World::new();
-        let mut u32s = world.new_handle(Table::<u32>::new());
-        let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
-        world.despawn(e1);
-
-        let mut locks = ColumnLocks::new(&u32s, &world);
-        let mut iter = locks.into_iter();
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn complex_maybe_query() {
-        let mut world = World::new();
-        let mut u32s = world.new_handle(Table::<u32>::new());
-        let u64s = world.new_handle(Table::<u64>::new());
-        let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
-        let e2 = world.spawn().insert(&mut u32s, 12_u32).id();
-        let mut locks = ColumnLocks::new((WithEntities, Maybe(&u64s), &u32s), &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
-        assert_eq!(returned, [(e1, None, &10_u32), (e2, None, &12_u32)]);
-    }
-}
-
-#[cfg(test)]
-mod mismatched_world_id_tests {
-    use crate::*;
-
-    #[test]
-    #[should_panic = "[Mismatched WorldIds]:"]
-    fn ref_join() {
-        let world = World::new();
-        let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(&other_u32s, &world);
-    }
-
-    #[test]
-    #[should_panic = "[Mismatched WorldIds]:"]
-    fn mut_join() {
-        let world = World::new();
-        let mut other_world = World::new();
-        let mut other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(&mut other_u32s, &world);
-    }
-
-    #[test]
-    #[should_panic = "[Mismatched WorldIds]:"]
-    fn maybe_join() {
-        let world = World::new();
-        let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(Maybe(&other_u32s), &world);
-    }
-
-    #[test]
-    #[should_panic = "[Mismatched WorldIds]:"]
-    fn unsatisfied_join() {
-        let world = World::new();
-        let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(Unsatisfied(&other_u32s), &world);
-    }
-
-    #[test]
-    #[should_panic = "[Mismatched WorldIds]:"]
-    fn multi_join() {
-        let world = World::new();
-        let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new((WithEntities, &other_u32s), &world);
-    }
-}
