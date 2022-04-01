@@ -14,6 +14,8 @@ mod sealed {
     pub trait AlignedBytes: Copy + 'static {
         type Iter<'a>: Iterator<Item = Self> + 'a;
         fn new_from_iter(data: &[MaybeUninit<u8>]) -> Self::Iter<'_>;
+        fn slice_to_bytes(data: &[Self]) -> &[MaybeUninit<u8>];
+        fn slice_to_bytes_mut(data: &mut [Self]) -> &mut [MaybeUninit<u8>];
     }
 }
 use sealed::AlignedBytes;
@@ -36,6 +38,16 @@ macro_rules! aligned_bytes_type_defs {
                     data
                         .chunks_exact(std::mem::size_of::<$T>())
                         .map(|data| $T(data.try_into().unwrap()))
+                }
+                fn slice_to_bytes(data: &[Self]) -> &[MaybeUninit<u8>] {
+                    let len = data.len();
+                    let this_ptr = data as *const [Self] as *const Self as *const MaybeUninit<u8>;
+                    unsafe { std::slice::from_raw_parts(this_ptr, std::mem::size_of::<Self>() * len) }
+                }
+                fn slice_to_bytes_mut(data: &mut [Self]) -> &mut [MaybeUninit<u8>] {
+                    let len = data.len();
+                    let this_ptr = data as *mut [Self] as *mut Self as *mut MaybeUninit<u8>;
+                    unsafe { std::slice::from_raw_parts_mut(this_ptr, std::mem::size_of::<Self>() * len) }
                 }
             }
         )*
@@ -123,15 +135,11 @@ impl<T: AlignedBytes> AlignedBytesVec for Vec<T> {
     }
 
     fn as_byte_slice(&self) -> &[MaybeUninit<u8>] {
-        let len = self.len();
-        let this_ptr = self.as_slice() as *const [T] as *const T as *const MaybeUninit<u8>;
-        unsafe { std::slice::from_raw_parts(this_ptr, std::mem::size_of::<T>() * len) }
+        T::slice_to_bytes(self.as_slice())
     }
 
     fn as_byte_slice_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        let len = self.len();
-        let this_ptr = self.as_mut_slice() as *mut [T] as *mut T as *mut MaybeUninit<u8>;
-        unsafe { std::slice::from_raw_parts_mut(this_ptr, std::mem::size_of::<T>() * len) }
+        T::slice_to_bytes_mut(self.as_mut_slice())
     }
 
     fn push(&mut self, data: &[MaybeUninit<u8>]) {
