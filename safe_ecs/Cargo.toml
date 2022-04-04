@@ -8,4 +8,4 @@ description = "ECS written in safe code"
 license = "MIT"
 
 [dependencies]
-safe_ecs_derive = "0.1"
+not_ghost_cell = { path = "../not_ghost_cell" }

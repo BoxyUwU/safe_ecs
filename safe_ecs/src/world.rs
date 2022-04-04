@@ -1,9 +1,10 @@
 use std::{
-    cell::{Ref, RefCell, RefMut},
+    cell::UnsafeCell,
     collections::HashMap,
-    rc::{Rc, Weak},
-    sync::atomic::AtomicUsize,
+    sync::{atomic::AtomicUsize, Weak},
 };
+
+use not_ghost_cell::{SlowGhostCell, SlowGhostToken};
 
 use crate::{
     entities::{Entities, Entity, EntityMeta},
@@ -21,31 +22,28 @@ pub trait ColumnsApi {
     type Get: ?Sized;
 
     fn get_component<'a>(
-        this: Ref<'a, Self>,
+        &'a self,
         world: &World,
         id: EcsTypeId,
         entity: Entity,
-    ) -> Option<Ref<'a, Self::Get>>;
+    ) -> Option<&'a Self::Get>;
     fn get_component_mut<'a>(
-        this: RefMut<'a, Self>,
+        &'a mut self,
         world: &World,
         id: EcsTypeId,
         entity: Entity,
-    ) -> Option<RefMut<'a, Self::Get>>;
+    ) -> Option<&'a mut Self::Get>;
     fn has_component(&self, world: &World, id: EcsTypeId, entity: Entity) -> bool {
         world
             .get_archetype(world.entity_meta(entity).unwrap().archetype)
             .column_index(id)
             .is_some()
     }
-    fn insert_overwrite<'a>(
-        overwrite: RefMut<'_, Self::Get>,
-        data: Self::Insert<'a>,
-    ) -> Self::Remove
+    fn insert_overwrite<'a>(overwrite: &mut Self::Get, data: Self::Insert<'a>) -> Self::Remove
     where
         Self: 'a;
     fn insert_component<'a, 'b>(
-        this: RefMut<'a, Self>,
+        &'a mut self,
         world: &mut World,
         id: EcsTypeId,
         entity: Entity,
@@ -53,7 +51,7 @@ pub trait ColumnsApi {
     ) where
         Self: 'b;
     fn remove_component<'a>(
-        this: RefMut<'a, Self>,
+        &'a mut self,
         world: &mut World,
         id: EcsTypeId,
         entity: Entity,
@@ -99,19 +97,37 @@ impl Archetype {
 }
 
 pub struct Handle<T: ?Sized> {
-    pub(crate) inner: Rc<RefCell<T>>,
+    pub(crate) inner: SlowGhostToken<T>,
     pub(crate) id: EcsTypeId,
     pub(crate) world_id: WorldId,
 }
 impl<T> Handle<T> {
-    pub(crate) fn new(columns: T, id: EcsTypeId, world_id: WorldId) -> (Self, Weak<RefCell<T>>) {
+    pub(crate) fn new<'a>(
+        columns: T,
+        id: EcsTypeId,
+        world_id: WorldId,
+    ) -> (Self, SlowGhostCell<dyn Columns + 'a>)
+    where
+        T: Columns + 'a,
+    {
+        let (cell, token) = SlowGhostCell::new(
+            columns,
+            |a: Weak<UnsafeCell<T>>| -> Weak<UnsafeCell<dyn Columns + 'a>> { a },
+        );
         let columns = Handle::<T> {
-            inner: Rc::new(RefCell::new(columns)),
+            inner: token,
             id,
             world_id,
         };
-        let weak_ref = Rc::downgrade(&columns.inner);
-        (columns, weak_ref)
+        (columns, cell)
+    }
+
+    pub(crate) fn deref<'a>(&'a self, world: &'a World) -> &'a T {
+        world.columns[&self.id].deref(&self.inner)
+    }
+
+    pub(crate) fn deref_mut<'a>(&'a mut self, world: &'a World) -> &'a mut T {
+        world.columns[&self.id].deref_mut(&mut self.inner)
     }
 }
 impl<T: ?Sized> Handle<T> {
@@ -136,28 +152,25 @@ impl<T: ?Sized> Handle<T> {
 }
 
 impl<C: ColumnsApi> Handle<C> {
-    pub fn get_component<'a>(
-        &'a self,
-        world: &'a World,
-        entity: Entity,
-    ) -> Option<Ref<'a, C::Get>> {
+    pub fn get_component<'a>(&'a self, world: &'a World, entity: Entity) -> Option<&'a C::Get> {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
-        C::get_component(self.inner.borrow(), world, self.id, entity)
+        C::get_component(self.deref(world), world, self.id, entity)
     }
     pub fn get_component_mut<'a>(
         &'a mut self,
         world: &'a World,
         entity: Entity,
-    ) -> Option<RefMut<'a, C::Get>> {
+    ) -> Option<&'a mut C::Get> {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
-        C::get_component_mut(self.inner.borrow_mut(), world, self.id, entity)
+        let ecs_type_id = self.id;
+        C::get_component_mut(self.deref_mut(world), world, ecs_type_id, entity)
     }
     pub fn has_component<'a>(&'a self, world: &'a World, entity: Entity) -> bool {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
-        C::has_component(&*self.inner.borrow(), world, self.id, entity)
+        C::has_component(self.deref(world), world, self.id, entity)
     }
     pub fn insert_component<'a>(
         &'a mut self,
@@ -173,7 +186,13 @@ impl<C: ColumnsApi> Handle<C> {
         }
 
         world.move_entity_from_insert(entity, self.id).unwrap();
-        C::insert_component(self.inner.borrow_mut(), world, self.id, entity, data);
+
+        // fixme this is really janky borrowck work around
+        let cell = world.columns.remove(&self.id).unwrap();
+        let cell_inner = cell.deref_mut(&mut self.inner);
+        C::insert_component(cell_inner, world, self.id, entity, data);
+        world.columns.insert(self.id, cell);
+
         None
     }
     pub fn remove_component<'a>(
@@ -184,11 +203,16 @@ impl<C: ColumnsApi> Handle<C> {
         world.assert_alive(entity);
         self.assert_world_id(world.id());
 
-        if C::has_component(&*self.inner.borrow(), world, self.id, entity) == false {
+        if C::has_component(self.deref(world), world, self.id, entity) == false {
             return None;
         }
 
-        let r = C::remove_component(self.inner.borrow_mut(), world, self.id, entity);
+        // fixme this is really janky borrowck work around
+        let cell = world.columns.remove(&self.id).unwrap();
+        let cell_inner = cell.deref_mut(&mut self.inner);
+        let r = C::remove_component(cell_inner, world, self.id, entity);
+        world.columns.insert(self.id, cell);
+
         world.move_entity_from_remove(entity, self.id).unwrap();
         Some(r)
     }
@@ -207,7 +231,7 @@ impl WorldId {
 pub struct World<'data> {
     pub(crate) entities: Entities,
     pub(crate) archetypes: Vec<Archetype>,
-    pub(crate) columns: HashMap<EcsTypeId, Weak<RefCell<dyn Columns + 'data>>>,
+    pub(crate) columns: HashMap<EcsTypeId, SlowGhostCell<dyn Columns + 'data>>,
     pub(crate) id: WorldId,
     next_ecs_type_id: EcsTypeId,
 }
@@ -237,6 +261,7 @@ impl<'a> World<'a> {
             .checked_add(1)
             .expect("dont make usize::MAX ecs_type_ids ???");
         let (column, weak) = Handle::<C>::new(columns, ecs_type_id, self.id);
+        let weak: SlowGhostCell<dyn Columns + 'a> = weak;
         self.columns.insert(ecs_type_id, weak);
         column
     }
@@ -281,9 +306,11 @@ impl<'a> World<'a> {
                 archetype.entities.swap_remove(entity_idx);
 
                 for (ty_id, &column_idx) in archetype.column_indices.iter() {
-                    self.columns[ty_id]
-                        .upgrade()
-                        .map(|data| data.borrow_mut().swap_remove_drop(column_idx, entity_idx));
+                    self.columns.get_mut(ty_id).unwrap().get_mut(|data| {
+                        if let Some(data) = data {
+                            data.swap_remove_drop(column_idx, entity_idx);
+                        }
+                    });
                 }
             });
     }
@@ -323,11 +350,16 @@ impl<'a> World<'a> {
 
         for (column_type_id, &new_column) in new_archetype.column_indices.iter() {
             let old_column = *old_archetype.column_indices.get(column_type_id).unwrap();
-            let columns = &self.columns[&column_type_id];
-            columns.upgrade().map(|data| {
-                data.borrow_mut()
-                    .swap_remove_to(old_column, new_column, entity_idx)
+            let columns = self.columns.get_mut(&column_type_id).unwrap();
+            columns.get_mut(|data| {
+                if let Some(data) = data {
+                    data.swap_remove_to(old_column, new_column, entity_idx)
+                }
             });
+            // .upgrade().map(|data| {
+            //     data.borrow_mut()
+            //         .swap_remove_to(old_column, new_column, entity_idx)
+            // });
         }
         new_archetype.entities.push(entity);
         Some((entity_idx, old_archetype))
@@ -358,11 +390,16 @@ impl<'a> World<'a> {
 
         for (column_type_id, &old_column) in old_archetype.column_indices.iter() {
             let new_column = *new_archetype.column_indices.get(column_type_id).unwrap();
-            let columns = &self.columns[&column_type_id];
-            columns.upgrade().map(|data| {
-                data.borrow_mut()
-                    .swap_remove_to(old_column, new_column, entity_idx)
+            let columns = self.columns.get_mut(&column_type_id).unwrap();
+            columns.get_mut(|data| {
+                if let Some(data) = data {
+                    data.swap_remove_to(old_column, new_column, entity_idx)
+                }
             });
+            // columns.upgrade().map(|data| {
+            //     data.borrow_mut()
+            //         .swap_remove_to(old_column, new_column, entity_idx)
+            // });
         }
         new_archetype.entities.push(entity);
         Some(new_archetype)
@@ -424,9 +461,14 @@ impl<'a> World<'a> {
         assert!(self.find_archetype_from_ids(&type_ids).is_none());
         let column_indices = type_ids
             .into_iter()
-            .map(|type_id| match self.columns[&type_id].upgrade() {
-                None => (type_id, 0),
-                Some(columns) => (type_id, columns.borrow_mut().push_empty_column()),
+            .map(|type_id| {
+                self.columns
+                    .get_mut(&type_id)
+                    .unwrap()
+                    .get_mut(|data| match data {
+                        None => (type_id, 0),
+                        Some(columns) => (type_id, columns.push_empty_column()),
+                    })
             })
             .collect::<HashMap<_, _>>();
         self.archetypes.push(Archetype {

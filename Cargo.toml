@@ -1,2 +1,2 @@
 [workspace]
-members = ["safe_ecs", "safe_ecs_dynamic"]
+members = ["not_ghost_cell", "safe_ecs", "safe_ecs_dynamic"]

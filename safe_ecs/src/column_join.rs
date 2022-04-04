@@ -1,5 +1,3 @@
-use std::cell::{Ref, RefMut};
-
 use crate::world::{Archetype, Columns};
 use crate::{EcsTypeId, Entity, IterableColumns, World};
 use crate::{Handle, WorldId};
@@ -130,7 +128,7 @@ where
     for<'b> &'b C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world> = (EcsTypeId, Ref<'world, C>)
+    type Locks<'world> = (EcsTypeId, &'world C)
     where
         Self: 'world;
 
@@ -150,15 +148,15 @@ where
         self.id
     }
 
-    fn make_locks<'world>(self, _: &'world World) -> Self::Locks<'world>
+    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
     where
         Self: 'world,
     {
-        (self.id, self.inner.borrow())
+        (self.id, self.deref(world))
     }
 
     fn make_state<'lock, 'world>(
-        (id, locks): &'lock mut (EcsTypeId, Ref<'world, C>),
+        (id, locks): &'lock mut (EcsTypeId, &'world C),
     ) -> Self::State<'lock>
     where
         Self: 'world + 'lock,
@@ -197,7 +195,7 @@ where
     for<'b> &'b mut C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world> = (EcsTypeId, RefMut<'world, C>)
+    type Locks<'world> = (EcsTypeId, &'world mut C)
     where
         Self: 'world;
 
@@ -217,11 +215,11 @@ where
         self.id
     }
 
-    fn make_locks<'world>(self, _: &'world World) -> Self::Locks<'world>
+    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
     where
         Self: 'world,
     {
-        (self.id, self.inner.borrow_mut())
+        (self.id, self.deref_mut(world))
     }
 
     fn make_state<'lock, 'world>((id, locks): &'lock mut Self::Locks<'world>) -> Self::State<'lock>

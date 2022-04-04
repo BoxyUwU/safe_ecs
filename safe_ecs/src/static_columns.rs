@@ -1,5 +1,3 @@
-use std::cell::{Ref, RefMut};
-
 use crate::{
     world::{Archetype, Columns, ColumnsApi},
     EcsTypeId, Entity, IterableColumns, World,
@@ -25,36 +23,29 @@ impl<T> ColumnsApi for Table<T> {
     type Remove = T;
     type Get = T;
 
-    fn get_component<'a>(
-        this: Ref<'a, Self>,
-        world: &World,
-        id: EcsTypeId,
-        entity: Entity,
-    ) -> Option<Ref<'a, T>> {
+    fn get_component<'a>(&'a self, world: &World, id: EcsTypeId, entity: Entity) -> Option<&'a T> {
         let archetype_id = world.entity_meta(entity)?.archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_index(id)?;
-        Some(Ref::map(this, |this| &this.0[column_idx][entity_idx]))
+        Some(&self.0[column_idx][entity_idx])
     }
 
     fn get_component_mut<'a>(
-        this: RefMut<'a, Self>,
+        &'a mut self,
         world: &World,
         id: EcsTypeId,
         entity: Entity,
-    ) -> Option<RefMut<'a, T>> {
+    ) -> Option<&'a mut T> {
         let archetype_id = world.entity_meta(entity)?.archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_index(id)?;
-        Some(RefMut::map(this, |this| {
-            &mut this.0[column_idx][entity_idx]
-        }))
+        Some(&mut self.0[column_idx][entity_idx])
     }
 
     fn insert_component<'a, 'b>(
-        mut this: RefMut<'a, Self>,
+        &'a mut self,
         world: &mut World,
         id: EcsTypeId,
         entity: Entity,
@@ -65,23 +56,18 @@ impl<T> ColumnsApi for Table<T> {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let column_idx = archetype.column_index(id).unwrap();
-        this.0[column_idx].push(data);
+        self.0[column_idx].push(data);
     }
 
-    fn remove_component<'a>(
-        mut this: RefMut<'a, Self>,
-        world: &mut World,
-        id: EcsTypeId,
-        entity: Entity,
-    ) -> T {
+    fn remove_component<'a>(&'a mut self, world: &mut World, id: EcsTypeId, entity: Entity) -> T {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_index(id).unwrap();
-        this.0[column_idx].swap_remove(entity_idx)
+        self.0[column_idx].swap_remove(entity_idx)
     }
 
-    fn insert_overwrite<'a>(mut overwrite: RefMut<'_, T>, data: T) -> T
+    fn insert_overwrite<'a>(overwrite: &mut T, data: T) -> T
     where
         Self: 'a,
     {

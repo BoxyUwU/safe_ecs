@@ -2,11 +2,7 @@
 
 use core::mem::MaybeUninit;
 use safe_ecs::{Archetype, Columns, ColumnsApi, EcsTypeId, Entity, IterableColumns, World};
-use std::{
-    alloc::Layout,
-    any::Any,
-    cell::{Ref, RefMut},
-};
+use std::{alloc::Layout, any::Any};
 
 mod sealed {
     use std::mem::MaybeUninit;
@@ -169,41 +165,41 @@ impl ColumnsApi for DynamicTable {
     type Get = [MaybeUninit<u8>];
 
     fn get_component<'a>(
-        this: Ref<'a, Self>,
+        &'a self,
         world: &World,
         id: EcsTypeId,
         entity: Entity,
-    ) -> Option<Ref<'a, [MaybeUninit<u8>]>> {
+    ) -> Option<&'a [MaybeUninit<u8>]> {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_index(id)?;
 
-        Some(Ref::map(this, |this| {
-            &this.buf[column_idx].as_byte_slice()
-                [(entity_idx * this.layout.size())..((entity_idx + 1) * this.layout.size())]
-        }))
+        Some(
+            &self.buf[column_idx].as_byte_slice()
+                [(entity_idx * self.layout.size())..((entity_idx + 1) * self.layout.size())],
+        )
     }
 
     fn get_component_mut<'a>(
-        this: RefMut<'a, Self>,
+        &'a mut self,
         world: &World,
         id: EcsTypeId,
         entity: Entity,
-    ) -> Option<RefMut<'a, [MaybeUninit<u8>]>> {
+    ) -> Option<&'a mut [MaybeUninit<u8>]> {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_index(id)?;
 
-        Some(RefMut::map(this, |this| {
-            &mut this.buf[column_idx].as_byte_slice_mut()
-                [(entity_idx * this.layout.size())..((entity_idx + 1) * this.layout.size())]
-        }))
+        Some(
+            &mut self.buf[column_idx].as_byte_slice_mut()
+                [(entity_idx * self.layout.size())..((entity_idx + 1) * self.layout.size())],
+        )
     }
 
     fn insert_overwrite<'a>(
-        mut overwrite: RefMut<'_, [MaybeUninit<u8>]>,
+        overwrite: &mut [MaybeUninit<u8>],
         data: &'a [MaybeUninit<u8>],
     ) -> Self::Remove
     where
@@ -216,7 +212,7 @@ impl ColumnsApi for DynamicTable {
     }
 
     fn insert_component<'a, 'b>(
-        mut this: RefMut<'a, Self>,
+        &'a mut self,
         world: &mut World,
         id: EcsTypeId,
         entity: Entity,
@@ -227,25 +223,20 @@ impl ColumnsApi for DynamicTable {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let column_idx = archetype.column_index(id).unwrap();
-        this.buf[column_idx].push(data);
+        self.buf[column_idx].push(data);
     }
 
-    fn remove_component<'a>(
-        mut this: RefMut<'a, Self>,
-        world: &mut World,
-        id: EcsTypeId,
-        entity: Entity,
-    ) {
+    fn remove_component<'a>(&'a mut self, world: &mut World, id: EcsTypeId, entity: Entity) {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
         let column_idx = archetype.column_index(id).unwrap();
 
-        let chunks_per_component = this.layout.size() / this.layout.align();
+        let chunks_per_component = self.layout.size() / self.layout.align();
         let component_chunks =
             (entity_idx * chunks_per_component)..((entity_idx + 1) * chunks_per_component);
 
-        this.buf[column_idx].swap_remove_drop(component_chunks);
+        self.buf[column_idx].swap_remove_drop(component_chunks);
     }
 }
 
