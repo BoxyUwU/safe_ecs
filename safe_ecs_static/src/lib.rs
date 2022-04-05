@@ -1,8 +1,8 @@
-use not_ghost_cell::SlowGhostToken;
+#![forbid(unsafe_code)]
+#![feature(generic_associated_types)]
 
-use crate::{
-    world::{Archetype, Columns, ColumnsApi},
-    EcsTypeId, Entity, Joinable, World, WorldId,
+use safe_ecs::{
+    EcsTypeId, Entity, Joinable, SlowGhostToken, World, WorldId, {Archetype, Columns, ColumnsApi},
 };
 
 pub struct RawTable<T>(Vec<Vec<T>>);
@@ -94,7 +94,7 @@ impl<T> Columns for RawTable<T> {
 
     fn swap_remove_to(&mut self, old_col: usize, new_col: usize, entity_idx: usize) {
         let cols = &mut self.0[..];
-        let (old_col, end_col) = crate::get_two_mut(cols, old_col, new_col);
+        let (old_col, end_col) = safe_ecs::get_two_mut(cols, old_col, new_col);
         end_col.push(old_col.swap_remove(entity_idx));
     }
 
@@ -120,7 +120,7 @@ impl<'a, T> Joinable for &'a Table<T> {
         Self: 'world;
 
     fn assert_world_id(&self, world_id: WorldId) {
-        crate::assert_world_id(world_id, self.2, std::any::type_name::<Table<T>>())
+        safe_ecs::assert_world_id(world_id, self.2, std::any::type_name::<Table<T>>())
     }
 
     fn make_ids(&self, _: &World) -> Self::Ids {
@@ -146,7 +146,7 @@ impl<'a, T> Joinable for &'a Table<T> {
     where
         Self: 'world,
     {
-        let col = archetype.column_indices[id];
+        let col = archetype.column_index(*id).unwrap();
         state.0[col].iter()
     }
 
@@ -174,7 +174,7 @@ impl<'a, T> Joinable for &'a mut Table<T> {
         Self: 'world;
 
     fn assert_world_id(&self, world_id: WorldId) {
-        crate::assert_world_id(world_id, self.2, std::any::type_name::<Table<T>>());
+        safe_ecs::assert_world_id(world_id, self.2, std::any::type_name::<Table<T>>());
     }
 
     fn make_ids(&self, _: &World) -> Self::Ids {
@@ -207,7 +207,7 @@ impl<'a, T> Joinable for &'a mut Table<T> {
     where
         Self: 'world,
     {
-        let col = archetype.column_indices[ecs_type_id];
+        let col = archetype.column_index(*ecs_type_id).unwrap();
         assert!(col >= *num_chopped_off);
         let idx = col - *num_chopped_off;
         let taken_out_borrow = std::mem::replace(lock_borrow, &mut []);
@@ -228,6 +228,7 @@ impl<'a, T> Joinable for &'a mut Table<T> {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use safe_ecs::*;
 
     trait UnwrapNone {
         fn unwrap_none(self);
@@ -490,6 +491,7 @@ mod tests {
 #[cfg(test)]
 mod mismatched_world_id_tests {
     use crate::*;
+    use safe_ecs::*;
 
     #[test]
     #[should_panic = "[Mismatched WorldIds]:"]

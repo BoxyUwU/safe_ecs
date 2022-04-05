@@ -6,29 +6,18 @@ use safe_ecs::{
 };
 use std::{alloc::Layout, any::Any};
 
-mod sealed {
-    use std::mem::MaybeUninit;
-
-    pub trait AlignedBytes: Copy + 'static {
-        type Iter<'a>: Iterator<Item = Self> + 'a;
-        fn new_from_iter(data: &[MaybeUninit<u8>]) -> Self::Iter<'_>;
-        fn slice_to_bytes(data: &[Self]) -> &[MaybeUninit<u8>];
-        fn slice_to_bytes_mut(data: &mut [Self]) -> &mut [MaybeUninit<u8>];
-    }
+pub(crate) trait AlignedBytes: Copy + 'static {
+    type Iter<'a>: Iterator<Item = Self> + 'a;
+    fn new_from_iter(data: &[MaybeUninit<u8>]) -> Self::Iter<'_>;
+    fn slice_to_bytes(data: &[Self]) -> &[MaybeUninit<u8>];
+    fn slice_to_bytes_mut(data: &mut [Self]) -> &mut [MaybeUninit<u8>];
 }
-use sealed::AlignedBytes;
 macro_rules! aligned_bytes_type_defs {
     ($($T:ident $A:literal)*) => {
         $(
             #[repr(C, align($A))]
             #[derive(Copy, Clone)]
-            pub struct $T([MaybeUninit<u8>; $A]);
-
-            impl $T {
-                pub fn new() -> Self {
-                    Self([MaybeUninit::uninit(); $A])
-                }
-            }
+            pub(crate) struct $T([MaybeUninit<u8>; $A]);
 
             impl AlignedBytes for $T {
                 type Iter<'a> = impl Iterator<Item = Self> + 'a;
@@ -102,6 +91,7 @@ aligned_bytes_type_defs! {
     AlignedBytes536870912 536870912
 }
 
+#[doc(hidden)]
 pub trait AlignedBytesVec {
     fn new(&self) -> Box<dyn AlignedBytesVec>;
     fn as_any_mut(&mut self) -> &mut dyn Any;

@@ -1,16 +1,16 @@
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 #![feature(type_alias_impl_trait, generic_associated_types)]
 
-mod column_join;
 mod entities;
-mod static_columns;
+mod joinable;
+mod storage;
 mod world;
 
-pub use column_join::{ColumnIterator, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use entities::Entity;
+pub use joinable::{ColumnIterator, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use not_ghost_cell::{SlowGhostCell, SlowGhostToken};
-pub use static_columns::Table;
-pub use world::{Archetype, Columns, ColumnsApi, EcsTypeId, EntityBuilder, World, WorldId};
+pub use storage::{Columns, ColumnsApi};
+pub use world::{Archetype, EcsTypeId, EntityBuilder, World, WorldId};
 
 pub fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;
