@@ -8,11 +8,9 @@ mod world;
 
 pub use column_join::{ColumnIterator, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use entities::Entity;
+pub use not_ghost_cell::{SlowGhostCell, SlowGhostToken};
 pub use static_columns::Table;
-pub use world::{
-    Archetype, Columns, ColumnsApi, EcsTypeId, EntityBuilder, Handle, IterableColumns, World,
-    WorldId,
-};
+pub use world::{Archetype, Columns, ColumnsApi, EcsTypeId, EntityBuilder, World, WorldId};
 
 pub fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mut T) {
     use std::cmp::Ordering;
@@ -28,5 +26,16 @@ pub fn get_two_mut<T>(vec: &mut [T], idx_1: usize, idx_2: usize) -> (&mut T, &mu
         Ordering::Equal => {
             panic!("")
         }
+    }
+}
+
+pub fn assert_world_id(id1: WorldId, id2: WorldId, type_name: &str) {
+    if id1 != id2 {
+        panic!(
+            "[Mismatched WorldIds]: attempt to use World: WorldId({}) with {}: WorldId({})",
+            id1.inner(),
+            type_name,
+            id2.inner(),
+        )
     }
 }

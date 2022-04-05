@@ -8,7 +8,7 @@ use not_ghost_cell::{SlowGhostCell, SlowGhostToken};
 
 use crate::{
     entities::{Entities, Entity, EntityMeta},
-    ColumnIterator, Joinable, Table,
+    ColumnIterator, Joinable,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
@@ -21,57 +21,106 @@ pub trait ColumnsApi {
     type Remove;
     type Get: ?Sized;
 
-    fn get_component<'a>(
-        &'a self,
-        world: &World,
-        id: EcsTypeId,
-        entity: Entity,
-    ) -> Option<&'a Self::Get>;
-    fn get_component_mut<'a>(
+    fn ecs_type_id(&self) -> EcsTypeId;
+    fn world_id(&self) -> WorldId;
+
+    fn get_component_raw<'a>(&'a self, world: &'a World, entity: Entity) -> Option<&'a Self::Get>;
+    fn get_component_raw_mut<'a>(
         &'a mut self,
-        world: &World,
-        id: EcsTypeId,
+        world: &'a World,
         entity: Entity,
     ) -> Option<&'a mut Self::Get>;
-    fn has_component(&self, world: &World, id: EcsTypeId, entity: Entity) -> bool {
+    fn has_component_raw<'a>(&'a self, world: &'a World, id: EcsTypeId, entity: Entity) -> bool {
         world
             .get_archetype(world.entity_meta(entity).unwrap().archetype)
             .column_index(id)
             .is_some()
     }
-    fn insert_overwrite<'a>(overwrite: &mut Self::Get, data: Self::Insert<'a>) -> Self::Remove
+    fn insert_overwrite_raw<'a>(overwrite: &mut Self::Get, data: Self::Insert<'a>) -> Self::Remove
     where
         Self: 'a;
-    fn insert_component<'a, 'b>(
+    fn insert_component_raw<'a, 'b>(
         &'a mut self,
-        world: &mut World,
-        id: EcsTypeId,
+        world: &'a World,
         entity: Entity,
         data: Self::Insert<'b>,
     ) where
         Self: 'b;
+    fn remove_component_raw<'a>(&'a mut self, world: &'a World, entity: Entity) -> Self::Remove;
+
+    fn get_component<'a>(&'a self, world: &'a World, entity: Entity) -> Option<&'a Self::Get> {
+        world.assert_alive(entity);
+        crate::assert_world_id(world.id(), self.world_id(), std::any::type_name::<Self>());
+        self.get_component_raw(world, entity)
+    }
+    fn get_component_mut<'a>(
+        &'a mut self,
+        world: &'a World,
+        entity: Entity,
+    ) -> Option<&'a mut Self::Get> {
+        world.assert_alive(entity);
+        crate::assert_world_id(world.id(), self.world_id(), std::any::type_name::<Self>());
+        self.get_component_raw_mut(world, entity)
+    }
+    fn has_component<'a>(&'a self, world: &'a World, entity: Entity) -> bool {
+        world.assert_alive(entity);
+        crate::assert_world_id(world.id(), self.world_id(), std::any::type_name::<Self>());
+        self.has_component_raw(world, self.ecs_type_id(), entity)
+    }
+    fn insert_component<'a>(
+        &'a mut self,
+        world: &'a mut World,
+        entity: Entity,
+        data: Self::Insert<'_>,
+    ) -> Option<Self::Remove> {
+        world.assert_alive(entity);
+        crate::assert_world_id(world.id(), self.world_id(), std::any::type_name::<Self>());
+
+        if let Some(comp) = self.get_component_mut(world, entity) {
+            return Some(Self::insert_overwrite_raw(comp, data));
+        }
+
+        world
+            .move_entity_from_insert(entity, self.ecs_type_id())
+            .unwrap();
+        self.insert_component_raw(world, entity, data);
+
+        None
+    }
     fn remove_component<'a>(
         &'a mut self,
-        world: &mut World,
-        id: EcsTypeId,
+        world: &'a mut World,
         entity: Entity,
-    ) -> Self::Remove;
+    ) -> Option<Self::Remove> {
+        world.assert_alive(entity);
+        crate::assert_world_id(world.id(), self.world_id(), std::any::type_name::<Self>());
+
+        if self.has_component_raw(world, self.ecs_type_id(), entity) == false {
+            return None;
+        }
+
+        let r = self.remove_component_raw(world, entity);
+        world
+            .move_entity_from_remove(entity, self.ecs_type_id())
+            .unwrap();
+        Some(r)
+    }
 }
 
-pub trait IterableColumns {
-    type Item;
-    type IterState;
-    type ArchetypeState;
+// pub trait IterableColumns {
+//     type Item;
+//     type IterState;
+//     type ArchetypeState;
 
-    fn make_iter_state(id: EcsTypeId, locks: Self) -> Self::IterState;
-    fn make_archetype_state<'lock>(
-        state: &mut Self::IterState,
-        archetype: &'lock Archetype,
-    ) -> Self::ArchetypeState
-    where
-        Self: 'lock;
-    fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item>;
-}
+//     fn make_iter_state(id: EcsTypeId, locks: Self) -> Self::IterState;
+//     fn make_archetype_state<'lock>(
+//         state: &mut Self::IterState,
+//         archetype: &'lock Archetype,
+//     ) -> Self::ArchetypeState
+//     where
+//         Self: 'lock;
+//     fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item>;
+// }
 
 pub trait Columns {
     fn push_empty_column(&mut self) -> usize;
@@ -86,6 +135,10 @@ pub struct Archetype {
 }
 
 impl Archetype {
+    pub fn contains_id(&self, id: EcsTypeId) -> bool {
+        self.column_indices.contains_key(&id)
+    }
+
     // fixme this is really slow lmao
     pub fn get_entity_idx(&self, entity: Entity) -> Option<usize> {
         self.entities.iter().position(|e| *e == entity)
@@ -93,128 +146,6 @@ impl Archetype {
 
     pub fn column_index(&self, id: EcsTypeId) -> Option<usize> {
         self.column_indices.get(&id).copied()
-    }
-}
-
-pub struct Handle<T: ?Sized> {
-    pub(crate) inner: SlowGhostToken<T>,
-    pub(crate) id: EcsTypeId,
-    pub(crate) world_id: WorldId,
-}
-impl<T> Handle<T> {
-    pub(crate) fn new<'a>(
-        columns: T,
-        id: EcsTypeId,
-        world_id: WorldId,
-    ) -> (Self, SlowGhostCell<dyn Columns + 'a>)
-    where
-        T: Columns + 'a,
-    {
-        let (cell, token) = SlowGhostCell::new(
-            columns,
-            |a: Weak<UnsafeCell<T>>| -> Weak<UnsafeCell<dyn Columns + 'a>> { a },
-        );
-        let columns = Handle::<T> {
-            inner: token,
-            id,
-            world_id,
-        };
-        (columns, cell)
-    }
-
-    pub(crate) fn deref<'a>(&'a self, world: &'a World) -> &'a T {
-        world.columns[&self.id].deref(&self.inner)
-    }
-
-    pub(crate) fn deref_mut<'a>(&'a mut self, world: &'a World) -> &'a mut T {
-        world.columns[&self.id].deref_mut(&mut self.inner)
-    }
-}
-impl<T: ?Sized> Handle<T> {
-    pub fn assert_world_id(&self, id: WorldId) {
-        if self.world_id != id {
-            panic!(
-                "[Mismatched WorldIds]: attempt to use World: WorldId({}) with Handle<{}>: WorldId({})",
-                self.world_id.inner(),
-                core::any::type_name::<T>(),
-                id.inner(),
-            )
-        }
-    }
-
-    pub fn world_id(&self) -> WorldId {
-        self.world_id
-    }
-
-    pub fn ecs_type_id(&self) -> EcsTypeId {
-        self.id
-    }
-}
-
-impl<C: ColumnsApi> Handle<C> {
-    pub fn get_component<'a>(&'a self, world: &'a World, entity: Entity) -> Option<&'a C::Get> {
-        world.assert_alive(entity);
-        self.assert_world_id(world.id());
-        C::get_component(self.deref(world), world, self.id, entity)
-    }
-    pub fn get_component_mut<'a>(
-        &'a mut self,
-        world: &'a World,
-        entity: Entity,
-    ) -> Option<&'a mut C::Get> {
-        world.assert_alive(entity);
-        self.assert_world_id(world.id());
-        let ecs_type_id = self.id;
-        C::get_component_mut(self.deref_mut(world), world, ecs_type_id, entity)
-    }
-    pub fn has_component<'a>(&'a self, world: &'a World, entity: Entity) -> bool {
-        world.assert_alive(entity);
-        self.assert_world_id(world.id());
-        C::has_component(self.deref(world), world, self.id, entity)
-    }
-    pub fn insert_component<'a>(
-        &'a mut self,
-        world: &'a mut World,
-        entity: Entity,
-        data: C::Insert<'_>,
-    ) -> Option<C::Remove> {
-        world.assert_alive(entity);
-        self.assert_world_id(world.id());
-
-        if let Some(comp) = self.get_component_mut(world, entity) {
-            return Some(C::insert_overwrite(comp, data));
-        }
-
-        world.move_entity_from_insert(entity, self.id).unwrap();
-
-        // fixme this is really janky borrowck work around
-        let cell = world.columns.remove(&self.id).unwrap();
-        let cell_inner = cell.deref_mut(&mut self.inner);
-        C::insert_component(cell_inner, world, self.id, entity, data);
-        world.columns.insert(self.id, cell);
-
-        None
-    }
-    pub fn remove_component<'a>(
-        &'a mut self,
-        world: &'a mut World,
-        entity: Entity,
-    ) -> Option<C::Remove> {
-        world.assert_alive(entity);
-        self.assert_world_id(world.id());
-
-        if C::has_component(self.deref(world), world, self.id, entity) == false {
-            return None;
-        }
-
-        // fixme this is really janky borrowck work around
-        let cell = world.columns.remove(&self.id).unwrap();
-        let cell_inner = cell.deref_mut(&mut self.inner);
-        let r = C::remove_component(cell_inner, world, self.id, entity);
-        world.columns.insert(self.id, cell);
-
-        world.move_entity_from_remove(entity, self.id).unwrap();
-        Some(r)
     }
 }
 
@@ -254,16 +185,21 @@ impl<'a> World<'a> {
         }
     }
 
-    pub fn new_handle<C: Columns + 'a>(&mut self, columns: C) -> Handle<C> {
+    pub fn new_handle_raw<C: Columns + 'a>(
+        &mut self,
+        columns: C,
+    ) -> (SlowGhostToken<C>, EcsTypeId) {
         let ecs_type_id = self.next_ecs_type_id;
         self.next_ecs_type_id.0 = ecs_type_id
             .0
             .checked_add(1)
             .expect("dont make usize::MAX ecs_type_ids ???");
-        let (column, weak) = Handle::<C>::new(columns, ecs_type_id, self.id);
-        let weak: SlowGhostCell<dyn Columns + 'a> = weak;
-        self.columns.insert(ecs_type_id, weak);
-        column
+        let (cell, token) = SlowGhostCell::new(
+            columns,
+            |a: Weak<UnsafeCell<C>>| -> Weak<UnsafeCell<dyn Columns + 'a>> { a },
+        );
+        self.columns.insert(ecs_type_id, cell);
+        (token, ecs_type_id)
     }
 
     pub fn id(&self) -> WorldId {
@@ -317,6 +253,26 @@ impl<'a> World<'a> {
 
     pub fn join<C: Joinable>(&self, joinables: C) -> ColumnIterator<'_, C> {
         ColumnIterator::new(joinables, self)
+    }
+
+    pub fn deref_token<'b, T>(&'b self, token: &'b SlowGhostToken<T>, id: EcsTypeId) -> &'b T {
+        self.columns[&id].deref(token)
+    }
+
+    pub fn deref_mut_token<'b, T>(
+        &'b self,
+        token: &'b mut SlowGhostToken<T>,
+        id: EcsTypeId,
+    ) -> &'b mut T {
+        self.columns[&id].deref_mut(token)
+    }
+
+    pub fn get_cell(&self, id: EcsTypeId) -> &SlowGhostCell<dyn Columns + 'a> {
+        &self.columns[&id]
+    }
+
+    pub fn get_cell_mut(&mut self, id: EcsTypeId) -> &mut SlowGhostCell<dyn Columns + 'a> {
+        self.columns.get_mut(&id).unwrap()
     }
 }
 
@@ -490,12 +446,16 @@ pub struct EntityBuilder<'a, 'b> {
 }
 
 impl<'a, 'b> EntityBuilder<'a, 'b> {
-    pub fn insert<T>(&mut self, storage: &mut Handle<Table<T>>, component: T) -> &mut Self {
+    pub fn insert<Storage: ColumnsApi>(
+        &mut self,
+        storage: &mut Storage,
+        component: <Storage as ColumnsApi>::Insert<'_>,
+    ) -> &mut Self {
         storage.insert_component(self.world, self.entity, component);
         self
     }
 
-    pub fn remove<T>(&mut self, storage: &mut Handle<Table<T>>) -> &mut Self {
+    pub fn remove<Storage: ColumnsApi>(&mut self, storage: &mut Storage) -> &mut Self {
         storage.remove_component(self.world, self.entity);
         self
     }

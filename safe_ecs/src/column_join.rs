@@ -1,6 +1,6 @@
-use crate::world::{Archetype, Columns};
-use crate::{EcsTypeId, Entity, IterableColumns, World};
-use crate::{Handle, WorldId};
+use crate::world::Archetype;
+use crate::WorldId;
+use crate::{Entity, World};
 
 pub struct ColumnIterator<'a, C: Joinable + 'a> {
     ids: C::Ids,
@@ -84,116 +84,6 @@ pub trait Joinable {
     fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world;
-}
-
-impl<'a, C: Columns> Joinable for &'a Handle<C>
-where
-    for<'b> &'b C: IterableColumns,
-{
-    type Ids = EcsTypeId;
-
-    type IterState<'lock> = <&'lock C as IterableColumns>::IterState
-    where
-        Self: 'lock;
-
-    type Item<'lock> = <&'lock C as IterableColumns>::Item
-    where
-        Self: 'lock;
-
-    type ArchetypeState<'lock> = <&'lock C as IterableColumns>::ArchetypeState
-    where
-        Self: 'lock;
-
-    fn make_ids(&self, _: &World) -> Self::Ids {
-        self.ecs_type_id()
-    }
-
-    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
-    where
-        Self: 'world,
-    {
-        <&C as IterableColumns>::make_iter_state(self.ecs_type_id(), self.deref(world))
-    }
-
-    fn make_archetype_state<'world>(
-        state: &mut Self::IterState<'world>,
-        archetype: &'world Archetype,
-    ) -> Self::ArchetypeState<'world>
-    where
-        Self: 'world,
-    {
-        <&C as IterableColumns>::make_archetype_state(state, archetype)
-    }
-
-    fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
-        archetype.column_indices.contains_key(ids)
-    }
-
-    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
-    where
-        Self: 'world,
-    {
-        <&C as IterableColumns>::item_of_entity(iter)
-    }
-
-    fn assert_world_id(&self, world_id: WorldId) {
-        (**self).assert_world_id(world_id);
-    }
-}
-
-impl<'a, C: Columns> Joinable for &'a mut Handle<C>
-where
-    for<'b> &'b mut C: IterableColumns,
-{
-    type Ids = EcsTypeId;
-
-    type IterState<'lock> = <&'lock mut C as IterableColumns>::IterState
-    where
-        Self: 'lock;
-
-    type Item<'lock> = <&'lock mut C as IterableColumns>::Item
-    where
-        Self: 'lock;
-
-    type ArchetypeState<'lock> = <&'lock mut C as IterableColumns>::ArchetypeState
-    where
-        Self: 'lock;
-
-    fn make_ids(&self, _: &World) -> Self::Ids {
-        self.ecs_type_id()
-    }
-
-    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
-    where
-        Self: 'world,
-    {
-        <&mut C as IterableColumns>::make_iter_state(self.ecs_type_id(), self.deref_mut(world))
-    }
-
-    fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
-        archetype.column_indices.contains_key(ids)
-    }
-
-    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
-    where
-        Self: 'world,
-    {
-        <&mut C as IterableColumns>::item_of_entity(iter)
-    }
-
-    fn make_archetype_state<'world>(
-        state: &mut Self::IterState<'world>,
-        archetype: &'world Archetype,
-    ) -> Self::ArchetypeState<'world>
-    where
-        Self: 'world,
-    {
-        <&mut C as IterableColumns>::make_archetype_state(state, archetype)
-    }
-
-    fn assert_world_id(&self, world_id: WorldId) {
-        (**self).assert_world_id(world_id);
-    }
 }
 
 pub struct WithEntities;

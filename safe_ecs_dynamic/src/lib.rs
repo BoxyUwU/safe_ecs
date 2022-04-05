@@ -1,7 +1,9 @@
 #![feature(generic_associated_types, type_alias_impl_trait)]
 
 use core::mem::MaybeUninit;
-use safe_ecs::{Archetype, Columns, ColumnsApi, EcsTypeId, Entity, IterableColumns, World};
+use safe_ecs::{
+    Archetype, Columns, ColumnsApi, EcsTypeId, Entity, Joinable, SlowGhostToken, World, WorldId,
+};
 use std::{alloc::Layout, any::Any};
 
 mod sealed {
@@ -48,10 +50,18 @@ macro_rules! aligned_bytes_type_defs {
             }
         )*
 
-        pub(crate) fn new_dynamic_table(layout: Layout) -> DynamicTable {
+        pub(crate) fn new_dynamic_table(world: &mut World, layout: Layout) -> DynamicTable {
             match layout.align() {
                 $(
-                    $A => DynamicTable { buf: vec![Box::new(Vec::<$T>::new())], layout, },
+                    $A => {
+                        let (token, id) = world.new_handle_raw(
+                            RawDynamicTable {
+                                buf: vec![Box::new(Vec::<$T>::new())],
+                                layout
+                            }
+                        );
+                        DynamicTable { token, id, world_id: world.id(), }
+                    },
                 )*
                 _ => unreachable!(),
             }
@@ -145,13 +155,18 @@ impl<T: AlignedBytes> AlignedBytesVec for Vec<T> {
     }
 }
 
-pub struct DynamicTable {
+pub struct RawDynamicTable {
     buf: Vec<Box<dyn AlignedBytesVec>>,
     layout: Layout,
 }
+pub struct DynamicTable {
+    token: SlowGhostToken<RawDynamicTable>,
+    id: EcsTypeId,
+    world_id: WorldId,
+}
 impl DynamicTable {
-    pub fn new(layout: Layout) -> Self {
-        new_dynamic_table(layout)
+    pub fn new(world: &mut World, layout: Layout) -> Self {
+        new_dynamic_table(world, layout)
     }
 }
 
@@ -164,41 +179,46 @@ impl ColumnsApi for DynamicTable {
     type Remove = ();
     type Get = [MaybeUninit<u8>];
 
-    fn get_component<'a>(
+    fn ecs_type_id(&self) -> EcsTypeId {
+        self.id
+    }
+    fn world_id(&self) -> WorldId {
+        self.world_id
+    }
+
+    fn get_component_raw<'a>(
         &'a self,
-        world: &World,
-        id: EcsTypeId,
+        world: &'a World,
         entity: Entity,
     ) -> Option<&'a [MaybeUninit<u8>]> {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = archetype.column_index(id)?;
-
+        let column_idx = archetype.column_index(self.id)?;
+        let inner = world.deref_token(&self.token, self.id);
         Some(
-            &self.buf[column_idx].as_byte_slice()
-                [(entity_idx * self.layout.size())..((entity_idx + 1) * self.layout.size())],
+            &inner.buf[column_idx].as_byte_slice()
+                [(entity_idx * inner.layout.size())..((entity_idx + 1) * inner.layout.size())],
         )
     }
 
-    fn get_component_mut<'a>(
+    fn get_component_raw_mut<'a>(
         &'a mut self,
-        world: &World,
-        id: EcsTypeId,
+        world: &'a World,
         entity: Entity,
     ) -> Option<&'a mut [MaybeUninit<u8>]> {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = archetype.column_index(id)?;
-
+        let column_idx = archetype.column_index(self.id)?;
+        let inner = world.deref_mut_token(&mut self.token, self.id);
         Some(
-            &mut self.buf[column_idx].as_byte_slice_mut()
-                [(entity_idx * self.layout.size())..((entity_idx + 1) * self.layout.size())],
+            &mut inner.buf[column_idx].as_byte_slice_mut()
+                [(entity_idx * inner.layout.size())..((entity_idx + 1) * inner.layout.size())],
         )
     }
 
-    fn insert_overwrite<'a>(
+    fn insert_overwrite_raw<'a>(
         overwrite: &mut [MaybeUninit<u8>],
         data: &'a [MaybeUninit<u8>],
     ) -> Self::Remove
@@ -211,10 +231,9 @@ impl ColumnsApi for DynamicTable {
         }
     }
 
-    fn insert_component<'a, 'b>(
+    fn insert_component_raw<'a, 'b>(
         &'a mut self,
-        world: &mut World,
-        id: EcsTypeId,
+        world: &'a World,
         entity: Entity,
         data: &'b [MaybeUninit<u8>],
     ) where
@@ -222,25 +241,27 @@ impl ColumnsApi for DynamicTable {
     {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
-        let column_idx = archetype.column_index(id).unwrap();
-        self.buf[column_idx].push(data);
+        let column_idx = archetype.column_index(self.id).unwrap();
+        let inner = world.deref_mut_token(&mut self.token, self.id);
+        inner.buf[column_idx].push(data);
     }
 
-    fn remove_component<'a>(&'a mut self, world: &mut World, id: EcsTypeId, entity: Entity) {
+    fn remove_component_raw<'a>(&'a mut self, world: &'a World, entity: Entity) {
         let archetype_id = world.entity_meta(entity).unwrap().archetype;
         let archetype = world.get_archetype(archetype_id);
         let entity_idx = archetype.get_entity_idx(entity).unwrap();
-        let column_idx = archetype.column_index(id).unwrap();
+        let column_idx = archetype.column_index(self.id).unwrap();
 
-        let chunks_per_component = self.layout.size() / self.layout.align();
+        let inner = world.deref_mut_token(&mut self.token, self.id);
+        let chunks_per_component = inner.layout.size() / inner.layout.align();
         let component_chunks =
             (entity_idx * chunks_per_component)..((entity_idx + 1) * chunks_per_component);
 
-        self.buf[column_idx].swap_remove_drop(component_chunks);
+        inner.buf[column_idx].swap_remove_drop(component_chunks);
     }
 }
 
-impl Columns for DynamicTable {
+impl Columns for RawDynamicTable {
     fn push_empty_column(&mut self) -> usize {
         let new = self.buf[0].new();
         self.buf.push(new);
@@ -262,45 +283,117 @@ impl Columns for DynamicTable {
         self.buf[col].swap_remove_drop(component_chunks);
     }
 }
-impl<'a> IterableColumns for &'a DynamicTable {
-    type Item = &'a [MaybeUninit<u8>];
-    type IterState = (usize, EcsTypeId, &'a [Box<dyn AlignedBytesVec>]);
-    type ArchetypeState = std::slice::ChunksExact<'a, MaybeUninit<u8>>;
 
-    fn make_iter_state(id: safe_ecs::EcsTypeId, locks: Self) -> Self::IterState {
-        (locks.layout.size(), id, &locks.buf[..])
+impl<'a> Joinable for &'a DynamicTable {
+    type Ids = EcsTypeId;
+
+    type IterState<'world> = (usize, EcsTypeId, &'world RawDynamicTable)
+    where
+        Self: 'world;
+
+    type ArchetypeState<'world> = std::slice::ChunksExact<'world, MaybeUninit<u8>>
+    where
+        Self: 'world;
+
+    type Item<'world> = &'world [MaybeUninit<u8>]
+    where
+        Self: 'world;
+
+    fn assert_world_id(&self, world_id: WorldId) {
+        safe_ecs::assert_world_id(
+            world_id,
+            self.world_id,
+            std::any::type_name::<DynamicTable>(),
+        )
     }
 
-    fn make_archetype_state<'lock>(
-        (size, id, state): &mut Self::IterState,
-        archetype: &'lock Archetype,
-    ) -> Self::ArchetypeState
+    fn make_ids(&self, _: &World) -> Self::Ids {
+        self.id
+    }
+
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
     where
-        Self: 'lock,
+        Self: 'world,
+    {
+        let id = self.id;
+        let derefd = world.deref_token(&self.token, id);
+        (derefd.layout.size(), id, derefd)
+    }
+
+    fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
+        archetype.contains_id(*ids)
+    }
+
+    fn make_archetype_state<'world>(
+        (size, id, state): &mut Self::IterState<'world>,
+        archetype: &'world Archetype,
+    ) -> Self::ArchetypeState<'world>
+    where
+        Self: 'world,
     {
         let col = archetype.column_index(*id).unwrap();
-        state[col].as_byte_slice().chunks_exact(*size)
+        state.buf[col].as_byte_slice().chunks_exact(*size)
     }
 
-    fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item> {
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
+    where
+        Self: 'world,
+    {
         iter.next()
     }
 }
-impl<'a> IterableColumns for &'a mut DynamicTable {
-    type Item = &'a mut [MaybeUninit<u8>];
-    type IterState = (usize, EcsTypeId, usize, &'a mut [Box<dyn AlignedBytesVec>]);
-    type ArchetypeState = std::slice::ChunksExactMut<'a, MaybeUninit<u8>>;
 
-    fn make_iter_state(id: safe_ecs::EcsTypeId, locks: Self) -> Self::IterState {
-        (locks.layout.size(), id, 0, &mut locks.buf[..])
+impl<'a> Joinable for &'a mut DynamicTable {
+    type Ids = EcsTypeId;
+
+    type IterState<'world> = (usize, EcsTypeId, usize, &'world mut [Box<dyn AlignedBytesVec>])
+    where
+        Self: 'world;
+
+    type ArchetypeState<'world> = std::slice::ChunksExactMut<'world, MaybeUninit<u8>>
+    where
+        Self: 'world;
+
+    type Item<'world> = &'world mut [MaybeUninit<u8>]
+    where
+        Self: 'world;
+
+    fn assert_world_id(&self, world_id: WorldId) {
+        safe_ecs::assert_world_id(
+            world_id,
+            self.world_id,
+            std::any::type_name::<DynamicTable>(),
+        );
     }
 
-    fn make_archetype_state<'lock>(
-        (size, ecs_type_id, num_chopped_off, lock_borrow): &mut Self::IterState,
-        archetype: &'lock Archetype,
-    ) -> Self::ArchetypeState
+    fn make_ids(&self, _: &World) -> Self::Ids {
+        self.id
+    }
+
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
     where
-        Self: 'lock,
+        Self: 'world,
+    {
+        let id = self.id;
+        let inner = world.deref_mut_token(&mut self.token, id);
+        (inner.layout.size(), id, 0, &mut inner.buf[..])
+    }
+
+    fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
+        archetype.contains_id(*ids)
+    }
+
+    fn make_archetype_state<'world>(
+        (size, ecs_type_id, num_chopped_off, lock_borrow): &mut (
+            usize,
+            EcsTypeId,
+            usize,
+            &'world mut [Box<dyn AlignedBytesVec>],
+        ),
+        archetype: &'world Archetype,
+    ) -> Self::ArchetypeState<'world>
+    where
+        Self: 'world,
     {
         let col = archetype.column_index(*ecs_type_id).unwrap();
         assert!(col >= *num_chopped_off);
@@ -316,7 +409,10 @@ impl<'a> IterableColumns for &'a mut DynamicTable {
             .chunks_exact_mut(*size)
     }
 
-    fn item_of_entity(iter: &mut Self::ArchetypeState) -> Option<Self::Item> {
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
+    where
+        Self: 'world,
+    {
         iter.next()
     }
 }
@@ -369,7 +465,7 @@ mod tests {
     #[test]
     fn has_component() {
         let mut world = World::new();
-        let u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         assert_eq!(u32s.has_component(&world, e), false);
     }
@@ -377,7 +473,7 @@ mod tests {
     #[test]
     fn basic_insert() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -387,7 +483,7 @@ mod tests {
     #[test]
     fn insert_overwrite() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -400,8 +496,8 @@ mod tests {
     #[test]
     fn insert_archetype_change() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        let mut u64s = world.new_handle(DynamicTable::new(Layout::new::<u64>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
+        let mut u64s = DynamicTable::new(&mut world, Layout::new::<u64>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -418,7 +514,7 @@ mod tests {
     #[should_panic = "Unexpected dead entity"]
     fn insert_on_dead() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -430,7 +526,7 @@ mod tests {
     #[test]
     fn basic_remove() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         u32s.remove_component(&mut world, e).unwrap_none();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
@@ -443,8 +539,8 @@ mod tests {
     #[test]
     fn remove_archetype_change() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        let mut u64s = world.new_handle(DynamicTable::new(Layout::new::<u64>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
+        let mut u64s = DynamicTable::new(&mut world, Layout::new::<u64>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -463,7 +559,7 @@ mod tests {
     #[should_panic = "Unexpected dead entity"]
     fn remove_on_dead() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -474,7 +570,7 @@ mod tests {
     #[test]
     fn get_component() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e = world.spawn().id();
         u32s.insert_component(&mut world, e, as_bytes(&10_u32))
             .unwrap_none();
@@ -484,7 +580,7 @@ mod tests {
     #[test]
     fn for_loop() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32));
         for (entity, data) in world.join((WithEntities, &u32s)) {
@@ -498,9 +594,9 @@ mod tests {
     #[test]
     fn simple_query() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        let mut u64s = world.new_handle(DynamicTable::new(Layout::new::<u64>()));
-        let mut u128s = world.new_handle(DynamicTable::new(Layout::new::<u128>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
+        let mut u64s = DynamicTable::new(&mut world, Layout::new::<u64>());
+        let mut u128s = DynamicTable::new(&mut world, Layout::new::<u128>());
 
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32))
@@ -525,9 +621,9 @@ mod tests {
     #[test]
     fn tuple_query() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        let mut u64s = world.new_handle(DynamicTable::new(Layout::new::<u64>()));
-        let mut u128s = world.new_handle(DynamicTable::new(Layout::new::<u128>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
+        let mut u64s = DynamicTable::new(&mut world, Layout::new::<u64>());
+        let mut u128s = DynamicTable::new(&mut world, Layout::new::<u128>());
 
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32))
@@ -554,9 +650,9 @@ mod tests {
     #[test]
     fn maybe_query() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        let mut u64s = world.new_handle(DynamicTable::new(Layout::new::<u64>()));
-        let mut u128s = world.new_handle(DynamicTable::new(Layout::new::<u128>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
+        let mut u64s = DynamicTable::new(&mut world, Layout::new::<u64>());
+        let mut u128s = DynamicTable::new(&mut world, Layout::new::<u128>());
 
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32))
@@ -594,7 +690,7 @@ mod tests {
     #[test]
     fn query_with_despawned() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32))
             .unwrap_none();
@@ -606,8 +702,8 @@ mod tests {
     #[test]
     fn complex_maybe_query() {
         let mut world = World::new();
-        let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        let u64s = world.new_handle(DynamicTable::new(Layout::new::<u64>()));
+        let mut u32s = DynamicTable::new(&mut world, Layout::new::<u32>());
+        let u64s = DynamicTable::new(&mut world, Layout::new::<u64>());
 
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32))
@@ -641,7 +737,7 @@ mod mismatched_world_id_tests {
     fn ref_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         world.join(&other_u32s);
     }
 
@@ -650,7 +746,7 @@ mod mismatched_world_id_tests {
     fn mut_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         world.join(&mut other_u32s);
     }
 
@@ -659,7 +755,7 @@ mod mismatched_world_id_tests {
     fn maybe_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         world.join(Maybe(&other_u32s));
     }
 
@@ -668,7 +764,7 @@ mod mismatched_world_id_tests {
     fn unsatisfied_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         world.join(Unsatisfied(&other_u32s));
     }
 
@@ -677,7 +773,7 @@ mod mismatched_world_id_tests {
     fn multi_join() {
         let world = World::new();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         world.join((WithEntities, &other_u32s));
     }
 
@@ -687,7 +783,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         other_u32s.remove_component(&mut world, e);
     }
 
@@ -697,7 +793,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         other_u32s.insert_component(&mut world, e, as_bytes(&10_u32));
     }
 
@@ -707,7 +803,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         other_u32s.has_component(&world, e);
     }
 
@@ -717,7 +813,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let mut other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let mut other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         other_u32s.get_component_mut(&world, e);
     }
 
@@ -727,7 +823,7 @@ mod mismatched_world_id_tests {
         let mut world = World::new();
         let e = world.spawn().id();
         let mut other_world = World::new();
-        let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
+        let other_u32s = DynamicTable::new(&mut other_world, Layout::new::<u32>());
         other_u32s.get_component(&world, e);
     }
 }
