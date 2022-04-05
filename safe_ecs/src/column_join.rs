@@ -2,57 +2,33 @@ use crate::world::{Archetype, Columns};
 use crate::{EcsTypeId, Entity, IterableColumns, World};
 use crate::{Handle, WorldId};
 
-pub struct ColumnIterator<'lock, 'world: 'lock, C: Joinable + 'lock> {
-    archetype_iter: ArchetypeIter<'world, 'lock, C>,
-    state: C::State<'lock>,
-    column_iter: Option<C::ItemIter<'lock>>,
-}
-
-pub struct ColumnLocks<'world_data, 'world, C: Joinable + 'world> {
+pub struct ColumnIterator<'a, C: Joinable + 'a> {
     ids: C::Ids,
-    world: &'world World<'world_data>,
-    locks: C::Locks<'world>,
+    archetypes: std::slice::Iter<'a, Archetype>,
+    column_iter: Option<C::ArchetypeState<'a>>,
+    joined: C::IterState<'a>,
 }
 
-type ArchetypeIter<'world: 'lock, 'lock, C: Joinable + 'lock> =
-    impl Iterator<Item = &'world Archetype> + 'lock;
-impl<'world_data, 'world, C: Joinable + 'world> ColumnLocks<'world_data, 'world, C> {
-    pub fn new(borrows: C, world: &'world World<'world_data>) -> Self {
-        C::assert_world_id(&borrows, world.id);
-        let ids = C::make_ids(&borrows, world);
-        let locks = C::make_locks(borrows, world);
-        Self { ids, locks, world }
-    }
-}
-
-impl<'lock, 'world_data, 'world, C: Joinable> ColumnIterator<'lock, 'world, C> {
-    pub fn new(locks: &'lock mut ColumnLocks<'world_data, 'world, C>) -> Self {
-        let state = C::make_state(&mut locks.locks);
-
-        fn defining_use<'world: 'lock, 'lock, C: Joinable + 'lock>(
-            world: &'world World,
-            ids: C::Ids,
-        ) -> ArchetypeIter<'world, 'lock, C> {
-            world
-                .archetypes
-                .iter()
-                .filter(move |archetype| C::archetype_matches(&ids, archetype))
-        }
-        ColumnIterator {
-            archetype_iter: defining_use(locks.world, locks.ids),
-            state,
+impl<'a, C: Joinable + 'a> ColumnIterator<'a, C> {
+    pub fn new(joined: C, world: &'a World) -> Self {
+        C::assert_world_id(&joined, world.id());
+        let ids = C::make_ids(&joined, world);
+        Self {
+            ids,
+            archetypes: world.archetypes.iter(),
             column_iter: None,
+            joined: C::make_iter_state(joined, world),
         }
     }
 }
 
-impl<'lock, 'world: 'lock, C: Joinable + 'lock> Iterator for ColumnIterator<'lock, 'world, C> {
-    type Item = C::Item<'lock>;
+impl<'a, C: Joinable + 'a> Iterator for ColumnIterator<'a, C> {
+    type Item = C::Item<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match &mut self.column_iter {
-                Some(iter) => match C::advance_iter(iter) {
+                Some(iter) => match C::make_item(iter) {
                     Some(v) => return Some(v),
                     None => {
                         self.column_iter = None;
@@ -60,24 +36,15 @@ impl<'lock, 'world: 'lock, C: Joinable + 'lock> Iterator for ColumnIterator<'loc
                     }
                 },
                 None => {
-                    let archetype = self.archetype_iter.next()?;
-                    let iter = C::iter_from_archetype(&mut self.state, archetype);
+                    let archetype = self
+                        .archetypes
+                        .find(|archetype| C::archetype_matches(&self.ids, archetype))?;
+                    let iter = C::make_archetype_state(&mut self.joined, archetype);
                     self.column_iter = Some(iter);
                     continue;
                 }
             }
         }
-    }
-}
-
-impl<'lock, 'world_data, 'world: 'lock, C: Joinable + 'lock> IntoIterator
-    for &'lock mut ColumnLocks<'world_data, 'world, C>
-{
-    type Item = C::Item<'lock>;
-    type IntoIter = ColumnIterator<'lock, 'world, C>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        ColumnIterator::new(self)
     }
 }
 
@@ -87,40 +54,36 @@ impl<'lock, 'world_data, 'world: 'lock, C: Joinable + 'lock> IntoIterator
 pub trait Joinable {
     type Ids: Copy;
 
-    type Locks<'world>
+    type IterState<'world>
     where
         Self: 'world;
 
-    type State<'lock>
-    where
-        Self: 'lock;
-
-    type Item<'lock>
-    where
-        Self: 'lock;
-
-    type ItemIter<'lock>
-    where
-        Self: 'lock;
-
-    fn make_ids(&self, world: &World) -> Self::Ids;
-    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
+    type ArchetypeState<'world>
     where
         Self: 'world;
-    fn make_state<'lock, 'world>(locks: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
-    where
-        Self: 'lock + 'world;
-    fn iter_from_archetype<'world>(
-        state: &mut Self::State<'world>,
-        archetype: &'world Archetype,
-    ) -> Self::ItemIter<'world>
+
+    type Item<'world>
     where
         Self: 'world;
-    fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool;
-    fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
-    where
-        Self: 'world;
+
     fn assert_world_id(&self, world_id: WorldId);
+    fn make_ids(&self, world: &World) -> Self::Ids;
+
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
+    where
+        Self: 'world;
+
+    fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool;
+    fn make_archetype_state<'world>(
+        state: &mut Self::IterState<'world>,
+        archetype: &'world Archetype,
+    ) -> Self::ArchetypeState<'world>
+    where
+        Self: 'world;
+
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
+    where
+        Self: 'world;
 }
 
 impl<'a, C: Columns> Joinable for &'a Handle<C>
@@ -128,11 +91,8 @@ where
     for<'b> &'b C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world> = (EcsTypeId, &'world C)
-    where
-        Self: 'world;
 
-    type State<'lock> = <&'lock C as IterableColumns>::IterState
+    type IterState<'lock> = <&'lock C as IterableColumns>::IterState
     where
         Self: 'lock;
 
@@ -140,34 +100,25 @@ where
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = <&'lock C as IterableColumns>::ArchetypeState
+    type ArchetypeState<'lock> = <&'lock C as IterableColumns>::ArchetypeState
     where
         Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
-        self.id
+        self.ecs_type_id()
     }
 
-    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
     where
         Self: 'world,
     {
-        (self.id, self.deref(world))
+        <&C as IterableColumns>::make_iter_state(self.ecs_type_id(), self.deref(world))
     }
 
-    fn make_state<'lock, 'world>(
-        (id, locks): &'lock mut (EcsTypeId, &'world C),
-    ) -> Self::State<'lock>
-    where
-        Self: 'world + 'lock,
-    {
-        <&C as IterableColumns>::make_iter_state(*id, &**locks)
-    }
-
-    fn iter_from_archetype<'world>(
-        state: &mut Self::State<'world>,
+    fn make_archetype_state<'world>(
+        state: &mut Self::IterState<'world>,
         archetype: &'world Archetype,
-    ) -> Self::ItemIter<'world>
+    ) -> Self::ArchetypeState<'world>
     where
         Self: 'world,
     {
@@ -178,7 +129,7 @@ where
         archetype.column_indices.contains_key(ids)
     }
 
-    fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world,
     {
@@ -195,11 +146,8 @@ where
     for<'b> &'b mut C: IterableColumns,
 {
     type Ids = EcsTypeId;
-    type Locks<'world> = (EcsTypeId, &'world mut C)
-    where
-        Self: 'world;
 
-    type State<'lock> = <&'lock mut C as IterableColumns>::IterState
+    type IterState<'lock> = <&'lock mut C as IterableColumns>::IterState
     where
         Self: 'lock;
 
@@ -207,43 +155,36 @@ where
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = <&'lock mut C as IterableColumns>::ArchetypeState
+    type ArchetypeState<'lock> = <&'lock mut C as IterableColumns>::ArchetypeState
     where
         Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {
-        self.id
+        self.ecs_type_id()
     }
 
-    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
     where
         Self: 'world,
     {
-        (self.id, self.deref_mut(world))
-    }
-
-    fn make_state<'lock, 'world>((id, locks): &'lock mut Self::Locks<'world>) -> Self::State<'lock>
-    where
-        Self: 'world + 'lock,
-    {
-        <&mut C as IterableColumns>::make_iter_state(*id, &mut **locks)
+        <&mut C as IterableColumns>::make_iter_state(self.ecs_type_id(), self.deref_mut(world))
     }
 
     fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
         archetype.column_indices.contains_key(ids)
     }
 
-    fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world,
     {
         <&mut C as IterableColumns>::item_of_entity(iter)
     }
 
-    fn iter_from_archetype<'world>(
-        state: &mut Self::State<'world>,
+    fn make_archetype_state<'world>(
+        state: &mut Self::IterState<'world>,
         archetype: &'world Archetype,
-    ) -> Self::ItemIter<'world>
+    ) -> Self::ArchetypeState<'world>
     where
         Self: 'world,
     {
@@ -259,11 +200,7 @@ pub struct WithEntities;
 impl Joinable for WithEntities {
     type Ids = ();
 
-    type Locks<'world> = ()
-    where
-        Self: 'world;
-
-    type State<'lock> = ()
+    type IterState<'lock> = ()
     where
         Self: 'lock;
 
@@ -271,28 +208,22 @@ impl Joinable for WithEntities {
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = std::slice::Iter<'lock, Entity>
+    type ArchetypeState<'lock> = std::slice::Iter<'lock, Entity>
     where
         Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {}
 
-    fn make_locks<'world>(self, _: &'world World) -> Self::Locks<'world>
+    fn make_iter_state<'world>(self, _: &'world World) -> Self::IterState<'world>
     where
         Self: 'world,
     {
     }
 
-    fn make_state<'lock, 'world>(_: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
-    where
-        Self: 'lock + 'world,
-    {
-    }
-
-    fn iter_from_archetype<'world>(
-        _: &mut Self::State<'world>,
+    fn make_archetype_state<'world>(
+        _: &mut Self::IterState<'world>,
         archetype: &'world Archetype,
-    ) -> Self::ItemIter<'world>
+    ) -> Self::ArchetypeState<'world>
     where
         Self: 'world,
     {
@@ -303,7 +234,7 @@ impl Joinable for WithEntities {
         true
     }
 
-    fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world,
     {
@@ -321,11 +252,7 @@ pub enum Either<T, U> {
 impl<J: Joinable> Joinable for Maybe<J> {
     type Ids = ();
 
-    type Locks<'world> = (J::Ids, J::Locks<'world>)
-    where
-        Self: 'world;
-
-    type State<'lock> = (J::Ids, J::State<'lock>)
+    type IterState<'lock> = (J::Ids, J::IterState<'lock>)
     where
         Self: 'lock;
 
@@ -333,35 +260,31 @@ impl<J: Joinable> Joinable for Maybe<J> {
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = Either<J::ItemIter<'lock>, std::ops::Range<usize>>
+    type ArchetypeState<'lock> = Either<J::ArchetypeState<'lock>, std::ops::Range<usize>>
     where
         Self: 'lock;
 
     fn make_ids(&self, _: &World) -> Self::Ids {}
 
-    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
     where
         Self: 'world,
     {
-        (J::make_ids(&self.0, world), J::make_locks(self.0, world))
+        (
+            J::make_ids(&self.0, world),
+            J::make_iter_state(self.0, world),
+        )
     }
 
-    fn make_state<'lock, 'world>(locks: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
-    where
-        Self: 'lock + 'world,
-    {
-        (locks.0, J::make_state(&mut locks.1))
-    }
-
-    fn iter_from_archetype<'world>(
-        (ids, state): &mut Self::State<'world>,
+    fn make_archetype_state<'world>(
+        (ids, state): &mut Self::IterState<'world>,
         archetype: &'world Archetype,
-    ) -> Self::ItemIter<'world>
+    ) -> Self::ArchetypeState<'world>
     where
         Self: 'world,
     {
         match J::archetype_matches(ids, archetype) {
-            true => Either::T(J::iter_from_archetype(state, archetype)),
+            true => Either::T(J::make_archetype_state(state, archetype)),
             false => Either::U(0..archetype.entities.len()),
         }
     }
@@ -370,12 +293,12 @@ impl<J: Joinable> Joinable for Maybe<J> {
         true
     }
 
-    fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world,
     {
         match iter {
-            Either::T(t) => J::advance_iter(t).map(Some),
+            Either::T(t) => J::make_item(t).map(Some),
             Either::U(u) => u.next().map(|_| None),
         }
     }
@@ -389,11 +312,7 @@ pub struct Unsatisfied<J: Joinable>(pub J);
 impl<J: Joinable> Joinable for Unsatisfied<J> {
     type Ids = J::Ids;
 
-    type Locks<'world> = J::Locks<'world>
-    where
-        Self: 'world;
-
-    type State<'lock> = J::State<'lock>
+    type IterState<'lock> = J::IterState<'lock>
     where
         Self: 'lock;
 
@@ -401,7 +320,7 @@ impl<J: Joinable> Joinable for Unsatisfied<J> {
     where
         Self: 'lock;
 
-    type ItemIter<'lock> = std::ops::Range<usize>
+    type ArchetypeState<'lock> = std::ops::Range<usize>
     where
         Self: 'lock;
 
@@ -409,24 +328,17 @@ impl<J: Joinable> Joinable for Unsatisfied<J> {
         J::make_ids(&self.0, world)
     }
 
-    fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
+    fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
     where
         Self: 'world,
     {
-        J::make_locks(self.0, world)
+        J::make_iter_state(self.0, world)
     }
 
-    fn make_state<'lock, 'world>(locks: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
-    where
-        Self: 'lock + 'world,
-    {
-        J::make_state(locks)
-    }
-
-    fn iter_from_archetype<'world>(
-        _: &mut Self::State<'world>,
+    fn make_archetype_state<'world>(
+        _: &mut Self::IterState<'world>,
         archetype: &'world Archetype,
-    ) -> Self::ItemIter<'world>
+    ) -> Self::ArchetypeState<'world>
     where
         Self: 'world,
     {
@@ -437,7 +349,7 @@ impl<J: Joinable> Joinable for Unsatisfied<J> {
         J::archetype_matches(ids, archetype) == false
     }
 
-    fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
+    fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
     where
         Self: 'world,
     {
@@ -457,11 +369,7 @@ macro_rules! tuple_impls_joinable {
         impl<$($T: Joinable),*> Joinable for ($($T,)*) {
             type Ids = ($($T::Ids,)*);
 
-            type Locks<'world> = ($($T::Locks<'world>,)*)
-            where
-                Self: 'world;
-
-            type State<'lock> = ($($T::State<'lock>,)*)
+            type IterState<'lock> = ($($T::IterState<'lock>,)*)
             where
                 Self: 'lock;
 
@@ -469,7 +377,7 @@ macro_rules! tuple_impls_joinable {
             where
                 Self: 'lock;
 
-            type ItemIter<'lock> = ($($T::ItemIter<'lock>,)*)
+            type ArchetypeState<'lock> = ($($T::ArchetypeState<'lock>,)*)
             where
                 Self: 'lock;
 
@@ -477,36 +385,30 @@ macro_rules! tuple_impls_joinable {
                 let ($($T,)*) = self;
                 ($($T::make_ids($T, world),)*)
             }
-            fn make_locks<'world>(self, world: &'world World) -> Self::Locks<'world>
+            fn make_iter_state<'world>(self, world: &'world World) -> Self::IterState<'world>
             where
                 Self: 'world {
                     let ($($T,)*) = self;
-                    ($($T::make_locks($T, world),)*)
+                    ($($T::make_iter_state($T, world),)*)
                 }
-            fn make_state<'lock, 'world>(locks: &'lock mut Self::Locks<'world>) -> Self::State<'lock>
-            where
-                Self: 'lock + 'world {
-                    let ($($T,)*) = locks;
-                    ($($T::make_state($T),)*)
-                }
-            fn iter_from_archetype<'world>(
-                state: &mut Self::State<'world>,
+            fn make_archetype_state<'world>(
+                state: &mut Self::IterState<'world>,
                 archetype: &'world Archetype,
-            ) -> Self::ItemIter<'world>
+            ) -> Self::ArchetypeState<'world>
             where
                 Self: 'world {
                     let ($($T,)*) = state;
-                    ($($T::iter_from_archetype($T, archetype),)*)
+                    ($($T::make_archetype_state($T, archetype),)*)
                 }
             fn archetype_matches(ids: &Self::Ids, archetype: &Archetype) -> bool {
                 let ($($T,)*) = ids;
                 true $(&& $T::archetype_matches($T, archetype))*
             }
-            fn advance_iter<'world>(iter: &mut Self::ItemIter<'world>) -> Option<Self::Item<'world>>
+            fn make_item<'world>(iter: &mut Self::ArchetypeState<'world>) -> Option<Self::Item<'world>>
             where
                 Self: 'world {
                     let ($($T,)*) = iter;
-                    Some(($($T::advance_iter($T)?,)*))
+                    Some(($($T::make_item($T)?,)*))
                 }
             fn assert_world_id(&self, world_id: WorldId) {
                 let ($($T,)*) = self;

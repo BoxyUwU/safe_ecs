@@ -4,11 +4,11 @@ use std::sync::{Arc, Weak};
 pub struct SlowGhostCell<T: ?Sized>(Weak<UnsafeCell<T>>);
 pub struct SlowGhostToken<T: ?Sized>(Arc<UnsafeCell<T>>);
 
-unsafe impl<T: Send + ?Sized> Send for SlowGhostCell<T> {}
-unsafe impl<T: Sync + ?Sized> Sync for SlowGhostCell<T> {}
+unsafe impl<T: Send + Sync + ?Sized> Send for SlowGhostCell<T> {}
+unsafe impl<T: Send + Sync + ?Sized> Sync for SlowGhostCell<T> {}
 
-unsafe impl<T: Send + ?Sized> Send for SlowGhostToken<T> {}
-unsafe impl<T: Sync + ?Sized> Sync for SlowGhostToken<T> {}
+unsafe impl<T: Send + Sync + ?Sized> Send for SlowGhostToken<T> {}
+unsafe impl<T: Send + Sync + ?Sized> Sync for SlowGhostToken<T> {}
 
 impl<T: ?Sized> SlowGhostCell<T> {
     pub fn new<U: ?Sized>(

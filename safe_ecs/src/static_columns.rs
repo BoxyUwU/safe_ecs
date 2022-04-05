@@ -269,7 +269,7 @@ mod tests {
         let mut world = World::new();
         let mut u32borrows = world.new_handle(Table::<&u32>::new());
         let e1 = world.spawn().insert(&mut u32borrows, b).id();
-        for (entity, data) in &mut ColumnLocks::new((WithEntities, &u32borrows), &world) {
+        for (entity, data) in world.join((WithEntities, &u32borrows)) {
             assert_eq!(entity, e1);
             assert_eq!(*data, b);
             return;
@@ -309,7 +309,7 @@ mod tests {
         let mut world = World::new();
         let mut u32s = world.new_handle(Table::<u32>::new());
         let e1 = world.spawn().insert(&mut u32s, 10).id();
-        for data in ColumnLocks::new((WithEntities, &u32s), &world).into_iter() {
+        for data in world.join((WithEntities, &u32s)) {
             assert_eq!(data, (e1, &10));
             return;
         }
@@ -332,8 +332,7 @@ mod tests {
             .insert(&mut u64s, 13_u64)
             .insert(&mut u128s, 9_u128)
             .id();
-        let mut locks = ColumnLocks::new(&u64s, &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
+        let returned = world.join(&u64s).collect::<Vec<_>>();
         assert_eq!(returned, [&12, &13]);
     }
 
@@ -353,8 +352,7 @@ mod tests {
             .insert(&mut u64s, 13_u64)
             .insert(&mut u128s, 9_u128)
             .id();
-        let mut locks = ColumnLocks::new((WithEntities, &u32s, &u64s), &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
+        let returned = world.join((WithEntities, &u32s, &u64s)).collect::<Vec<_>>();
         assert_eq!(returned, [(e1, &10, &12)]);
     }
 
@@ -376,9 +374,9 @@ mod tests {
             .insert(&mut u128s, 9_u128)
             .id();
 
-        let mut locks =
-            ColumnLocks::new((WithEntities, Maybe(&u32s), &u64s, Maybe(&u128s)), &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
+        let returned = world
+            .join((WithEntities, Maybe(&u32s), &u64s, Maybe(&u128s)))
+            .collect::<Vec<_>>();
         assert_eq!(
             returned,
             [
@@ -395,8 +393,7 @@ mod tests {
         let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
         world.despawn(e1);
 
-        let mut locks = ColumnLocks::new(&u32s, &world);
-        let mut iter = locks.into_iter();
+        let mut iter = world.join(&u32s);
         assert_eq!(iter.next(), None);
     }
 
@@ -407,8 +404,9 @@ mod tests {
         let u64s = world.new_handle(Table::<u64>::new());
         let e1 = world.spawn().insert(&mut u32s, 10_u32).id();
         let e2 = world.spawn().insert(&mut u32s, 12_u32).id();
-        let mut locks = ColumnLocks::new((WithEntities, Maybe(&u64s), &u32s), &world);
-        let returned = locks.into_iter().collect::<Vec<_>>();
+        let returned = world
+            .join((WithEntities, Maybe(&u64s), &u32s))
+            .collect::<Vec<_>>();
         assert_eq!(returned, [(e1, None, &10_u32), (e2, None, &12_u32)]);
     }
 }
@@ -473,7 +471,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(&other_u32s, &world);
+        world.join(&other_u32s);
     }
 
     #[test]
@@ -482,7 +480,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let mut other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(&mut other_u32s, &world);
+        world.join(&mut other_u32s);
     }
 
     #[test]
@@ -491,7 +489,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(Maybe(&other_u32s), &world);
+        world.join(Maybe(&other_u32s));
     }
 
     #[test]
@@ -500,7 +498,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new(Unsatisfied(&other_u32s), &world);
+        world.join(Unsatisfied(&other_u32s));
     }
 
     #[test]
@@ -509,6 +507,6 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(Table::<u32>::new());
-        ColumnLocks::new((WithEntities, &other_u32s), &world);
+        world.join((WithEntities, &other_u32s));
     }
 }

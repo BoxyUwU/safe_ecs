@@ -8,7 +8,7 @@ use not_ghost_cell::{SlowGhostCell, SlowGhostToken};
 
 use crate::{
     entities::{Entities, Entity, EntityMeta},
-    Table,
+    ColumnIterator, Joinable, Table,
 };
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
@@ -313,6 +313,10 @@ impl<'a> World<'a> {
                     });
                 }
             });
+    }
+
+    pub fn join<C: Joinable>(&self, joinables: C) -> ColumnIterator<'_, C> {
+        ColumnIterator::new(joinables, self)
     }
 }
 

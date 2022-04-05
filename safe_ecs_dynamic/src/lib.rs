@@ -487,7 +487,7 @@ mod tests {
         let mut u32s = world.new_handle(DynamicTable::new(Layout::new::<u32>()));
         let e1 = world.spawn().id();
         u32s.insert_component(&mut world, e1, as_bytes(&10_u32));
-        for (entity, data) in ColumnLocks::new((WithEntities, &u32s), &world).into_iter() {
+        for (entity, data) in world.join((WithEntities, &u32s)) {
             assert_eq!(entity, e1);
             assert_bytes(data, 10_u32);
             return;
@@ -515,9 +515,8 @@ mod tests {
             .insert_component(&mut world, e2, as_bytes(&9_u128))
             .unwrap_none();
 
-        let mut locks = ColumnLocks::new(&u64s, &world);
-        let returned = locks
-            .into_iter()
+        let returned = world
+            .join(&u64s)
             .map(|data1| unas_bytes::<u64>(data1))
             .collect::<Vec<_>>();
         assert_eq!(returned, [&12_u64, &13_u64]);
@@ -543,9 +542,8 @@ mod tests {
             .insert_component(&mut world, e2, as_bytes(&9_u128))
             .unwrap_none();
 
-        let mut locks = ColumnLocks::new((WithEntities, &u32s, &u64s), &world);
-        let returned = locks
-            .into_iter()
+        let returned = world
+            .join((WithEntities, &u32s, &u64s))
             .map(|(entity, data1, data2)| {
                 (entity, unas_bytes::<u32>(data1), unas_bytes::<u64>(data2))
             })
@@ -573,10 +571,8 @@ mod tests {
             .insert_component(&mut world, e2, as_bytes(&9_u128))
             .unwrap_none();
 
-        let mut locks =
-            ColumnLocks::new((WithEntities, Maybe(&u32s), &u64s, Maybe(&u128s)), &world);
-        let returned = locks
-            .into_iter()
+        let returned = world
+            .join((WithEntities, Maybe(&u32s), &u64s, Maybe(&u128s)))
             .map(|(entity, data1, data2, data3)| {
                 (
                     entity,
@@ -604,9 +600,7 @@ mod tests {
             .unwrap_none();
         world.despawn(e1);
 
-        let mut locks = ColumnLocks::new(&u32s, &world);
-        let mut iter = locks.into_iter();
-        assert!(iter.next().is_none());
+        assert!(world.join(&u32s).next().is_none());
     }
 
     #[test]
@@ -623,9 +617,8 @@ mod tests {
         u32s.insert_component(&mut world, e2, as_bytes(&12_u32))
             .unwrap_none();
 
-        let mut locks = ColumnLocks::new((WithEntities, Maybe(&u64s), &u32s), &world);
-        let returned = locks
-            .into_iter()
+        let returned = world
+            .join((WithEntities, Maybe(&u64s), &u32s))
             .map(|(entity, data1, data2)| {
                 (
                     entity,
@@ -649,7 +642,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        ColumnLocks::new(&other_u32s, &world);
+        world.join(&other_u32s);
     }
 
     #[test]
@@ -658,7 +651,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let mut other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        ColumnLocks::new(&mut other_u32s, &world);
+        world.join(&mut other_u32s);
     }
 
     #[test]
@@ -667,7 +660,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        ColumnLocks::new(Maybe(&other_u32s), &world);
+        world.join(Maybe(&other_u32s));
     }
 
     #[test]
@@ -676,7 +669,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        ColumnLocks::new(Unsatisfied(&other_u32s), &world);
+        world.join(Unsatisfied(&other_u32s));
     }
 
     #[test]
@@ -685,7 +678,7 @@ mod mismatched_world_id_tests {
         let world = World::new();
         let mut other_world = World::new();
         let other_u32s = other_world.new_handle(DynamicTable::new(Layout::new::<u32>()));
-        ColumnLocks::new((WithEntities, &other_u32s), &world);
+        world.join((WithEntities, &other_u32s));
     }
 
     #[test]

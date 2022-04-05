@@ -6,7 +6,7 @@ mod entities;
 mod static_columns;
 mod world;
 
-pub use column_join::{ColumnIterator, ColumnLocks, Joinable, Maybe, Unsatisfied, WithEntities};
+pub use column_join::{ColumnIterator, Joinable, Maybe, Unsatisfied, WithEntities};
 pub use entities::Entity;
 pub use static_columns::Table;
 pub use world::{
