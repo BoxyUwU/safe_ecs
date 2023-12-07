@@ -1,6 +1,6 @@
 # decentralecs
 
-This branch does not use exclusively unsafe code although it is well abstracted and kept to a minimum. Ideally this 
+This branch does not use exclusively unsafe code although it is well abstracted and kept to a minimum. Ideally this branch would be its own repository and all the crates would be renamed to `decentralecs`.
 
 Archetype based ECS with the following notable features:
 - custom implementations of component storage
